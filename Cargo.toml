@@ -9,13 +9,13 @@ crate-type = ["rlib"]
 
 
 [dependencies]
-petgraph = { version = "0.8.3", default-features = false, features = [] }
+petgraph = { version = "0.8.3", default-features = false, features = ["stable_graph"] }
 async-trait = "0.1.89"
 uuid = { version = "1.22.0", features = ["v4"] }
-tauri = "2.10.3"
 tracing = "0.1.44"
 serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
 heck = "0.5.0"
+async-lock = { version = "3.4.2", default-features = false, features = [] }
 
 [lints.clippy]
 unwrap_used = "deny"
