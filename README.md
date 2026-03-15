@@ -1,5 +1,7 @@
 # Jax
 
+[![no_std compatible](https://img.shields.io/badge/no__std-compatible-seagreen.svg?style=flat-square)](https://crates.io/crates/jax)
+
 Jax is a lightweight, dependency-aware plugin system for Rust applications. It allows you to register modular components called "shards" that have explicit dependencies and handle their lifecycle (setup and teardown) in the correct topological order with support for bounded concurrency and failure propagation.
 
 ## Features
