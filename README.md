@@ -22,7 +22,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-jax = { git = "https://github.com/yourusername/jax.git", branch = "main" }  # or use a published version when available
+jax = { git = "https://github.com/tarnishablec/jax.git", branch = "main" }  # or use a published version when available
 ```
 
 ## Quick Start
