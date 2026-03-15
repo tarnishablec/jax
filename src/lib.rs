@@ -1,9 +1,11 @@
 #![no_std]
 extern crate alloc;
 
+pub mod config;
 pub mod report;
 pub mod shard;
 
+use crate::config::JaxConfig;
 use crate::report::{ShardError, StartupReport};
 use crate::shard::Shard;
 use crate::shard::dag::compute_shard_layers;
@@ -13,6 +15,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::error::Error;
 use core::sync::atomic::{AtomicPtr, Ordering};
+use futures::stream;
+use futures::stream::StreamExt;
 use petgraph::stable_graph::StableDiGraph;
 use uuid::Uuid;
 
@@ -31,17 +35,28 @@ struct ShardRegistry {
 pub struct Jax {
     registry: AtomicPtr<ShardRegistry>,
     pending: Vec<Arc<dyn Shard>>,
+    //
+    config: JaxConfig,
 }
 
 impl Jax {
+    pub fn with_config(config: JaxConfig) -> Self {
+        Self {
+            config,
+            registry: Default::default(),
+            pending: Default::default(),
+        }
+    }
+
     /// Register a shard. Must be called before `start()`.
-    pub fn register<T: Shard>(&mut self, shard: Arc<T>) {
+    pub fn register<T: Shard>(mut self, shard: Arc<T>) -> Self {
         self.pending.push(shard);
+        self
     }
 
     /// Finalizes the registry by building the dependency graph.
     /// This is an incremental-rebuild: it loads the current registry, clones its data, and merges the new shards.
-    pub fn build(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub fn build(mut self) -> Result<Self, Box<dyn Error + Send + Sync>> {
         // 1. Load the existing state or initialize new containers
         let (mut graph, mut indices) = if let Some(snapshot) = self.snapshot_registry() {
             // Clone the existing graph and index map to perform incremental updates
@@ -114,24 +129,33 @@ impl Jax {
             }
         }
 
-        Ok(())
+        Ok(self)
     }
 
+    /// Starts all registered shards in topological order.
+    ///
+    /// Execution is performed layer-by-layer. Shards within the same layer are
+    /// independent and executed concurrently with a maximum concurrency limit.
     pub async fn start(self: &Arc<Self>) -> Result<StartupReport, Box<dyn Error + Send + Sync>> {
         let snapshot = self
             .snapshot_registry()
             .ok_or("Jax: Registry is null. Did you call build()?")?;
 
-        // Compute execution layers via DAG topological sort
+        // 1. Compute execution layers via DAG topological sort.
+        // Shards in the same layer have no dependencies on each other.
         let layers = compute_shard_layers(&snapshot.graph)?;
 
-        // Set up shards layer by layer; within each layer shards are independent
         let mut report = StartupReport::default();
         let mut failed_ids = BTreeSet::new();
 
-        for layer in layers {
-            let mut futures = Vec::new();
+        // Define the maximum number of concurrent setups within a single layer.
+        // This prevents resource exhaustion (e.g., too many open file handles).
+        let max_concurrency = self.config.max_concurrency;
 
+        for layer in layers {
+            let mut tasks = Vec::new();
+
+            // 2. Synchronous Phase: Filter shards based on dependency health.
             for shard in layer {
                 let shard_id = shard.id();
 
@@ -141,26 +165,34 @@ impl Jax {
                     .any(|dep_id| failed_ids.contains(dep_id));
 
                 if has_failed_dependency {
+                    // Mark as skipped and propagate failure to its downstream dependents.
                     failed_ids.insert(shard_id);
                     report.skipped.push(shard_id);
-                    continue;
+                } else {
+                    // Shard is healthy; prepare its setup task.
+                    let jax_ref = Arc::clone(self);
+                    tasks.push(async move {
+                        shard
+                            .setup(jax_ref)
+                            .await
+                            .map(|_| shard_id)
+                            .map_err(|e| ShardError {
+                                id: shard_id,
+                                error: e,
+                            })
+                    });
                 }
-
-                let jax_ref = Arc::clone(self);
-                futures.push(async move {
-                    match shard.setup(jax_ref).await {
-                        Ok(_) => Ok(shard_id),
-                        Err(e) => Err(ShardError {
-                            id: shard_id,
-                            error: e,
-                        }),
-                    }
-                });
             }
 
-            // Setup current layer
-            let results = futures::future::join_all(futures).await;
+            // 3. Asynchronous Phase: Execute setups with controlled concurrency.
+            // buffer_unordered allows up to `max_concurrency` tasks to run
+            // simultaneously without enforcing the completion order.
+            let results = stream::iter(tasks)
+                .buffer_unordered(max_concurrency)
+                .collect::<Vec<_>>()
+                .await;
 
+            // 4. Finalize: Collect results and update the failure set.
             for res in results {
                 if let Err(err) = res {
                     failed_ids.insert(err.id);
@@ -174,28 +206,23 @@ impl Jax {
 
     /// Stops all shards in reverse topological order.
     pub async fn stop(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let ptr = self.registry.load(Ordering::Acquire);
-        if ptr.is_null() {
-            return Ok(());
-        }
+        let snapshot = match self.snapshot_registry() {
+            Some(s) => s,
+            None => return Ok(()),
+        };
 
-        let snapshot = self
-            .snapshot_registry()
-            .expect("Jax: Failed to load shard registry");
-
-        // Compute execution layers
         let mut layers = compute_shard_layers(&snapshot.graph)?;
-
-        // Teardown in reverse order (bottom-up)
         layers.reverse();
 
-        for layer in layers {
-            let mut futures = Vec::new();
-            for shard in layer {
-                futures.push(async move { shard.teardown().await });
-            }
+        let max_concurrency = self.config.max_concurrency;
 
-            let results = futures::future::join_all(futures).await;
+        for layer in layers {
+            let results = stream::iter(layer)
+                .map(|shard| async move { shard.teardown().await })
+                .buffer_unordered(max_concurrency)
+                .collect::<Vec<_>>()
+                .await;
+
             for res in results {
                 res?;
             }
