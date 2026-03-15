@@ -1,10 +1,10 @@
+use crate::ShardGraph;
 use crate::shard::Shard;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use petgraph::Direction::{Incoming, Outgoing};
 use petgraph::prelude::NodeIndex;
-use petgraph::stable_graph::StableDiGraph;
 
 // --- State Bitmasks ---
 pub const PENDING: u8 = 1 << 0;
@@ -18,7 +18,7 @@ pub const CANCELLED: u8 = 1 << 7;
 
 pub struct ShardScheduler<'a> {
     /// Read-only reference to the global plugin graph
-    graph: &'a StableDiGraph<Arc<dyn Shard>, ()>,
+    graph: &'a ShardGraph,
     /// Index-aligned atomic in-degree counters
     in_degrees: Vec<AtomicUsize>,
     /// Index-aligned atomic bitmask states
@@ -26,7 +26,7 @@ pub struct ShardScheduler<'a> {
 }
 
 impl<'a> ShardScheduler<'a> {
-    pub fn new(graph: &'a StableDiGraph<Arc<dyn Shard>, ()>) -> Self {
+    pub fn new(graph: &'a ShardGraph) -> Self {
         let node_count = graph.node_count();
         let mut in_degrees = Vec::with_capacity(node_count);
         let mut states = Vec::with_capacity(node_count);
