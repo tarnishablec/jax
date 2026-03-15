@@ -1,5 +1,6 @@
-pub mod dag;
 pub mod info;
+pub mod layer;
+pub mod schedule;
 
 use crate::Jax;
 use alloc::boxed::Box;
@@ -43,7 +44,7 @@ pub trait Shard: DowncastSync + 'static {
     }
 
     /// Called at shard shutdown: unsubscribe from events, save config, etc.
-    async fn teardown(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn teardown(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }
 
