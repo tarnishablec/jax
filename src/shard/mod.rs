@@ -33,7 +33,9 @@ pub trait Shard: DowncastSync + 'static {
     }
 
     /// Called at app startup: subscribe to events, load config, etc.
-    async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
+        Ok(())
+    }
 
     async fn dispatch(
         &self,
