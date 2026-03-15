@@ -2,8 +2,6 @@ use crate::shard::Shard;
 use alloc::string::String;
 use uuid::Uuid;
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ShardInfo {
     pub id: Uuid,
     pub label: String,

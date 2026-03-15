@@ -32,7 +32,7 @@ pub(crate) struct ShardRegistry {
 
 /// Core application context.
 ///
-/// Lifecycle: `new()` → `register()` → `Arc::new()` → `start()`.
+/// Lifecycle: `default/with_config()` → `register()` → `Arc::new()` → `start()`.
 #[derive(Default)]
 pub struct Jax {
     registry: AtomicPtr<ShardRegistry>,
