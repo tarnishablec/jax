@@ -27,7 +27,7 @@ jax = { git = "https://github.com/yourusername/jax.git", branch = "main" }  # or
 
 ## Quick Start
 ```rust
-use jax::{Jax, JaxConfig};
+use jax::{depends, shard_id, Jax, Shard};
 use core::sync::Arc;
 
 // Define your shard

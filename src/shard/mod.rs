@@ -96,7 +96,7 @@ macro_rules! shard_id {
 macro_rules! depends {
     ($($shard:ty),* $(,)?) => {
         vec![
-            $( <$shard as $crate::shard::Shard>::static_id() ),*
+            $( <$shard as $crate::Shard>::static_id() ),*
         ]
     };
 }

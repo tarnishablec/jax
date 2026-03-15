@@ -3,11 +3,11 @@ extern crate alloc;
 
 pub mod config;
 pub mod report;
-pub mod shard;
+mod shard;
 
 use crate::config::JaxConfig;
 use crate::report::{ShardError, StartupReport};
-use crate::shard::Shard;
+pub use crate::shard::Shard;
 use crate::shard::layer::compute_shard_layers;
 use crate::shard::schedule::ShardScheduler;
 use alloc::boxed::Box;
