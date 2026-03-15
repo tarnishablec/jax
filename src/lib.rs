@@ -172,19 +172,19 @@ impl Jax {
     /// ```
     ///
     /// Panics if `T` was never registered.
-    pub fn get_shard<T: Shard + Send + Sync + 'static>(&self) -> Arc<T> {
+    pub fn get_shard<T: Shard>(&self) -> Arc<T> {
         let snapshot = self
             .snapshot_registry()
             .expect("Jax: Registry is null. Did you call build()?");
 
         let shard_uuid = T::static_id();
 
-        let node_idx = snapshot
-            .native_indices
-            .get(&shard_uuid)
-            .unwrap_or_else(|| {
-                panic!("Jax: Shard with ID [{}] not found. Was it registered?", shard_uuid)
-            });
+        let node_idx = snapshot.native_indices.get(&shard_uuid).unwrap_or_else(|| {
+            panic!(
+                "Jax: Shard with ID [{}] not found. Was it registered?",
+                shard_uuid
+            )
+        });
 
         let shard = snapshot.graph[*node_idx].clone();
 
