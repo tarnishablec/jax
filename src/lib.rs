@@ -1,12 +1,14 @@
 #![no_std]
 extern crate alloc;
 
+pub mod report;
 pub mod shard;
 
+use crate::report::{ShardError, StartupReport};
 use crate::shard::Shard;
 use crate::shard::dag::compute_shard_layers;
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::error::Error;
@@ -34,102 +36,140 @@ pub struct Jax {
 impl Jax {
     /// Register a shard. Must be called before `start()`.
     pub fn register<T: Shard>(&mut self, shard: Arc<T>) {
-        self.pending.push(shard as Arc<dyn Shard>);
+        self.pending.push(shard);
     }
 
+    /// Finalizes the registry by building the dependency graph.
+    /// This is an incremental-rebuild: it loads the current registry, clones its data, and merges the new shards.
     pub fn build(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let mut graph = StableDiGraph::new();
-        let mut indices = BTreeMap::new();
+        // 1. Load the existing state or initialize new containers
+        let (mut graph, mut indices) = if let Some(snapshot) = self.snapshot_registry() {
+            // Clone the existing graph and index map to perform incremental updates
+            (snapshot.graph.clone(), snapshot.native_indices.clone())
+        } else {
+            (StableDiGraph::new(), BTreeMap::new())
+        };
 
-        // 1. Drain all pending shards
-        let shards: Vec<Arc<dyn Shard>> = self.pending.drain(..).collect();
+        // 2. Drain new shards from the pending queue
+        let new_shards: Vec<Arc<dyn Shard>> = self.pending.drain(..).collect();
+        let mut new_node_indices = Vec::with_capacity(new_shards.len());
 
-        // 2. Add each shard as a graph node
-        for shard in shards {
+        // 3. Add new shards as nodes
+        for shard in new_shards {
             let shard_id = shard.id();
+
+            // Prevent overwriting existing shards
             if indices.contains_key(&shard_id) {
-                return Err("Duplicate shard registered".into());
+                return Err(
+                    alloc::format!("Jax: Shard [{}] already exists in registry", shard_id).into(),
+                );
             }
+
             let idx = graph.add_node(shard);
             indices.insert(shard_id, idx);
+            new_node_indices.push(idx);
         }
 
-        // 3. Build dependency edges
-        for &consumer_idx in indices.values() {
-            let shard = &graph[consumer_idx];
-            for dep_id in shard.dependencies() {
+        // 4. Update edges for the NEW nodes
+        // We only need to scan dependencies for the shards we just added
+        for &consumer_idx in &new_node_indices {
+            let dep_ids = {
+                let shard = &graph[consumer_idx];
+                shard.dependencies()
+            };
+
+            for dep_id in dep_ids {
                 if let Some(&provider_idx) = indices.get(&dep_id) {
+                    // Direction: Provider -> Consumer
                     graph.add_edge(provider_idx, consumer_idx, ());
                 } else {
-                    return Err("Missing dependency found during build".into());
+                    return Err(alloc::format!(
+                        "Jax: Missing dependency [{}] for new shard [{}]",
+                        dep_id,
+                        graph[consumer_idx].id()
+                    )
+                    .into());
                 }
             }
         }
 
-        // 4. Cycle detection
+        // 5. Verify graph integrity (Cycle Detection)
         if petgraph::algo::is_cyclic_directed(&graph) {
-            return Err("Jax: Circular dependency detected!".into());
+            return Err("Jax: Incremental build failed due to circular dependency".into());
         }
 
-        // 5. Wrap into a new snapshot
-        let new_registry = Arc::new(ShardRegistry {
+        // 6. Atomically update the registry
+        let new_registry = Arc::into_raw(Arc::new(ShardRegistry {
             graph,
             native_indices: indices,
             guest_indices: Default::default(),
-        });
-        let new_ptr = Arc::into_raw(new_registry) as *mut ShardRegistry;
+        })) as *mut ShardRegistry;
 
-        // 6. Atomically swap the registry pointer
-        let old_ptr = self.registry.swap(new_ptr, Ordering::AcqRel);
+        let old_ptr = self.registry.swap(new_registry, Ordering::AcqRel);
 
-        // 7. Drop the old registry if it exists
+        // 7. Safe cleanup
         if !old_ptr.is_null() {
-            // SAFETY: `old_ptr` was created by `Arc::into_raw` in a previous `build()` call.
-            // The `swap` above ensures exclusive ownership of this pointer. Reconstructing
-            // the Arc decrements the strong count, allowing deallocation when no longer used.
             unsafe {
-                Arc::from_raw(old_ptr);
+                drop(Arc::from_raw(old_ptr));
             }
         }
 
         Ok(())
     }
 
-    pub async fn start(self: &Arc<Self>) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let ptr = self.registry.load(Ordering::Acquire);
-        if ptr.is_null() {
-            return Err("Jax: Registry is null. Did you call build()?".into());
-        }
-
-        // SAFETY: `ptr` was created by `Arc::into_raw` in `build()`.
-        // `increment_strong_count` keeps the original alive while `from_raw` produces
-        // a second owning Arc for local use.
-        let snapshot = unsafe {
-            Arc::increment_strong_count(ptr);
-            Arc::from_raw(ptr)
-        };
+    pub async fn start(self: &Arc<Self>) -> Result<StartupReport, Box<dyn Error + Send + Sync>> {
+        let snapshot = self
+            .snapshot_registry()
+            .ok_or("Jax: Registry is null. Did you call build()?")?;
 
         // Compute execution layers via DAG topological sort
         let layers = compute_shard_layers(&snapshot.graph)?;
 
         // Set up shards layer by layer; within each layer shards are independent
+        let mut report = StartupReport::default();
+        let mut failed_ids = BTreeSet::new();
+
         for layer in layers {
             let mut futures = Vec::new();
 
             for shard in layer {
+                let shard_id = shard.id();
+
+                let has_failed_dependency = shard
+                    .dependencies()
+                    .iter()
+                    .any(|dep_id| failed_ids.contains(dep_id));
+
+                if has_failed_dependency {
+                    failed_ids.insert(shard_id);
+                    report.skipped.push(shard_id);
+                    continue;
+                }
+
                 let jax_ref = Arc::clone(self);
-                futures.push(async move { shard.setup(jax_ref).await });
+                futures.push(async move {
+                    match shard.setup(jax_ref).await {
+                        Ok(_) => Ok(shard_id),
+                        Err(e) => Err(ShardError {
+                            id: shard_id,
+                            error: e,
+                        }),
+                    }
+                });
             }
 
-            // Execute all setups in the same layer concurrently.
-            // If any setup fails, the entire start is aborted.
+            // Setup current layer
             let results = futures::future::join_all(futures).await;
+
             for res in results {
-                res?;
+                if let Err(err) = res {
+                    failed_ids.insert(err.id);
+                    report.failed.push(err);
+                }
             }
         }
 
-        Ok(())
+        Ok(report)
     }
 
     /// Stops all shards in reverse topological order.
