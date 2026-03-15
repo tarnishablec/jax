@@ -33,7 +33,6 @@ pub(crate) struct ShardRegistry {
 /// Core application context.
 ///
 /// Lifecycle: `new()` → `register()` → `Arc::new()` → `start()`.
-/// Tauri drives it: `Builder::setup()` builds and starts Jax.
 #[derive(Default)]
 pub struct Jax {
     registry: AtomicPtr<ShardRegistry>,
@@ -139,6 +138,48 @@ impl Jax {
         Ok(self)
     }
 
+    /// Starts all registered shards in **dependency-aware topological order** with bounded concurrency.
+    ///
+    /// ### Startup Strategy Overview
+    ///
+    /// 1. **Topological scheduling (dynamic Kahn's algorithm variant)**:
+    ///    - Shards are started only after **all their dependencies** have successfully completed setup.
+    ///    - Uses a **ready queue** + atomic in-degree tracking (via `ShardScheduler`) to dynamically discover
+    ///      newly ready shards as upstream dependencies finish.
+    ///    - This guarantees the correct initialization order: providers before consumers.
+    ///
+    /// 2. **Bounded concurrency**:
+    ///    - At most `self.config.max_concurrency` shards run their `setup()` simultaneously.
+    ///    - Prevents overwhelming the system (e.g., too many network connections, database sessions,
+    ///      or CPU-intensive initializations at once).
+    ///
+    /// 3. **Failure handling (fail-fast and automatic pruning)**:
+    ///    - If any shard's `setup()` fails:
+    ///      - That shard is marked FAILED.
+    ///      - All downstream shards (direct and transitive dependents) are automatically **skipped**
+    ///        and never started (via `notify_failure` + `SKIPPED` propagation).
+    ///    - This prevents cascading failures and resource waste on shards that can no longer function.
+    ///    - Failed and skipped shards are recorded in the returned `StartupReport`.
+    ///
+    /// 4. **Event-driven execution loop**:
+    ///    - Uses `FuturesUnordered` + a manual `ready_queue` (VecDeque) to:
+    ///      - Fill up to `max_concurrency` tasks when possible
+    ///      - Process completions asynchronously
+    ///      - Immediately enqueue newly ready shards upon success
+    ///    - The loop continues until no more tasks are pending and no ready shards remain.
+    ///
+    /// 5. **Thread-safety and lifetime**:
+    ///    - `Arc<Jax>` and `Arc<ShardScheduler>` are cloned into each async task.
+    ///
+    /// ### Returned value
+    /// - `Ok(StartupReport)` on completion (even with failures/skips)
+    /// - Contains lists of:
+    ///   - `failed`: shards that errored during setup
+    ///   - `skipped`: shards that were never started due to upstream failure
+    ///
+    /// ### When to call
+    /// Typically invoked once during application startup (e.g., in Tauri's `setup()` hook)
+    /// after all shards have been `register()`ed and `build()` has been called.
     pub async fn start(self: &Arc<Self>) -> Result<StartupReport, Box<dyn Error + Send + Sync>> {
         let snapshot = self.snapshot_registry().ok_or("Jax: Registry null")?;
 
@@ -201,6 +242,27 @@ impl Jax {
         Ok(report)
     }
 
+    /// Graceful shutdown of all shards using **best-effort reverse topological order**.
+    ///
+    /// ### Strategy (why this design):
+    /// 1. **Reverse topological order** (layers are computed with Kahn's algorithm then reversed):
+    ///    - Consumer shards (leaves) teardown **first**.
+    ///    - Provider shards (roots) teardown **last**.
+    ///      This guarantees that no shard is still using a resource that has already been cleaned up.
+    ///
+    /// 2. **Best-effort / tolerant policy** (the most important part):
+    ///    - Every single `teardown()` in every layer **will run to completion**.
+    ///    - Failure in one shard **never cancels** other shards in the same layer or later layers.
+    ///    - This prevents resource leaks (sockets, event subscriptions, threads, files, etc.)
+    ///      even when some shards fail to shut down cleanly.
+    ///
+    /// 3. **Error handling**:
+    ///    - All errors are collected internally.
+    ///    - Only the **first** error is returned (others are discarded or logged).
+    ///
+    /// ### Concurrency:
+    /// - Inside each layer: `buffer_unordered(max_concurrency)` (safe because same-layer shards have no dependencies).
+    ///
     pub async fn stop(self: &Arc<Self>) -> Result<(), Box<dyn Error + Send + Sync>> {
         let snapshot = match self.snapshot_registry() {
             Some(s) => s,
@@ -211,8 +273,9 @@ impl Jax {
         layers.reverse();
 
         let max_concurrency = self.config.max_concurrency;
+        let mut all_errors: Vec<Box<dyn Error + Send + Sync>> = Vec::new();
 
-        for layer in layers {
+        for layer in layers.into_iter() {
             let results = stream::iter(layer)
                 .map(|shard| {
                     let jax_ptr = Arc::clone(self);
@@ -223,11 +286,17 @@ impl Jax {
                 .await;
 
             for res in results {
-                res?;
+                if let Err(e) = res {
+                    all_errors.push(e);
+                }
             }
         }
 
-        Ok(())
+        if let Some(first_err) = all_errors.into_iter().next() {
+            Err(first_err)
+        } else {
+            Ok(())
+        }
     }
 
     /// Retrieve a native shard by its concrete type.
