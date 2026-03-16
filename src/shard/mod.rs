@@ -5,8 +5,8 @@ use crate::Jax;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
-use alloc::{format, vec};
 use async_trait::async_trait;
 use core::any::type_name;
 use core::error::Error;
@@ -34,14 +34,6 @@ pub trait Shard: DowncastSync + 'static {
     /// Called at app startup: subscribe to events, load config, etc.
     async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
-    }
-
-    async fn dispatch(
-        &self,
-        method: &str,
-        _args: &[u8],
-    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
-        Err(format!("Unknown method [{}]", method).into())
     }
 
     /// Called at shard shutdown: unsubscribe from events, save config, etc.
