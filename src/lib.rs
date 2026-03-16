@@ -325,9 +325,13 @@ impl Jax {
 
         let shard = snapshot.graph[*node_idx].clone();
 
-        shard
-            .downcast_arc::<T>()
-            .unwrap_or_else(|_| panic!("Jax: Shard type mismatch for ID [{}]", shard_uuid))
+        shard.downcast_arc::<T>().unwrap_or_else(|_| {
+            panic!(
+                "Jax: Shard type [{}] mismatch for ID [{}]",
+                type_name::<T>(),
+                shard_uuid
+            )
+        })
     }
 
     fn snapshot_registry(&self) -> Option<Arc<ShardRegistry>> {
