@@ -14,6 +14,7 @@ use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::any::type_name;
 use core::error::Error;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use futures::stream;
@@ -316,7 +317,8 @@ impl Jax {
 
         let node_idx = snapshot.native_indices.get(&shard_uuid).unwrap_or_else(|| {
             panic!(
-                "Jax: Shard with ID [{}] not found. Was it registered?",
+                "Jax: Shard [{}] with ID [{}] not found. Was it registered?",
+                type_name::<T>(),
                 shard_uuid
             )
         });
