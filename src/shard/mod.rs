@@ -1,4 +1,3 @@
-pub mod info;
 pub mod layer;
 pub mod schedule;
 
