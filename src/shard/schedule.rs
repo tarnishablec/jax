@@ -13,6 +13,7 @@ pub const RUNNING: u8 = 1 << 2;
 pub const SUCCESS: u8 = 1 << 3;
 pub const FAILED: u8 = 1 << 4;
 pub const SKIPPED: u8 = 1 << 5;
+#[allow(dead_code)]
 pub const TIMEOUT: u8 = 1 << 6;
 pub const CANCELLED: u8 = 1 << 7;
 
@@ -112,6 +113,7 @@ impl<'a> ShardScheduler<'a> {
     }
 
     /// Get the final snapshot (used for generating reports)
+    #[allow(dead_code)]
     pub fn get_status(&self, idx: usize) -> u8 {
         self.states[idx].load(Ordering::Acquire)
     }
