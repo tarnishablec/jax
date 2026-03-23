@@ -1,17 +1,21 @@
 #![no_std]
 extern crate alloc;
 
+#[cfg(feature = "setup-timing")]
+extern crate std;
+
 pub mod config;
 pub mod report;
 mod shard;
 
 use crate::config::JaxConfig;
-use crate::report::{ShardError, StartupReport};
+use crate::report::{ShardError, StartupReport, StoredStartupReport};
 pub use crate::shard::Shard;
 use crate::shard::layer::compute_shard_layers;
 use crate::shard::schedule::ShardScheduler;
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::any::type_name;
@@ -37,6 +41,7 @@ pub(crate) struct ShardRegistry {
 #[derive(Default)]
 pub struct Jax {
     registry: AtomicPtr<ShardRegistry>,
+    startup_report: AtomicPtr<StoredStartupReport>,
     pending: Vec<Arc<dyn Shard>>,
     //
     config: JaxConfig,
@@ -47,6 +52,7 @@ impl Jax {
         Self {
             config,
             registry: Default::default(),
+            startup_report: Default::default(),
             pending: Default::default(),
         }
     }
@@ -200,9 +206,20 @@ impl Jax {
             let shard_id = shard.id();
             async move {
                 scheduler_ptr.mark_running(idx);
-                match shard.setup(jax_ptr).await {
-                    Ok(_) => Ok((shard_id, idx)),
-                    Err(e) => Err((shard_id, idx, e)),
+
+                #[cfg(feature = "setup-timing")]
+                let start_time = std::time::Instant::now();
+
+                let result = shard.setup(jax_ptr).await;
+
+                #[cfg(feature = "setup-timing")]
+                let elapsed = start_time.elapsed();
+                #[cfg(not(feature = "setup-timing"))]
+                let elapsed = core::time::Duration::ZERO;
+
+                match result {
+                    Ok(_) => Ok((shard_id, idx, elapsed)),
+                    Err(e) => Err((shard_id, idx, e, elapsed)),
                 }
             }
         };
@@ -226,17 +243,33 @@ impl Jax {
 
             if let Some(res) = tasks.next().await {
                 match res {
-                    Ok((_id, idx)) => {
+                    Ok((_id, idx, elapsed)) => {
+                        report.durations.insert(_id, elapsed);
                         for next_item in scheduler.notify_success(idx) {
                             ready_queue.push_back(next_item);
                         }
                     }
-                    Err((id, idx, err)) => {
+                    Err((id, idx, err, elapsed)) => {
+                        report.durations.insert(id, elapsed);
                         let skipped_ids = scheduler.notify_failure(idx);
                         report.skipped.extend(skipped_ids);
                         report.failed.push(ShardError { id, error: err });
                     }
                 }
+            }
+        }
+
+        // Store a clone-friendly summary for later queries
+        let stored = StoredStartupReport {
+            failed_ids: report.failed.iter().map(|f| f.id).collect(),
+            skipped: report.skipped.clone(),
+            durations: report.durations.clone(),
+        };
+        let stored_ptr = Box::into_raw(Box::new(stored));
+        let old_report = self.startup_report.swap(stored_ptr, Ordering::AcqRel);
+        if !old_report.is_null() {
+            unsafe {
+                drop(Box::from_raw(old_report));
             }
         }
 
@@ -334,6 +367,34 @@ impl Jax {
         })
     }
 
+    /// Returns all registered shard IDs, labels, and dependency lists.
+    pub fn list_shards(&self) -> Vec<(Uuid, String, Vec<Uuid>)> {
+        let Some(snapshot) = self.snapshot_registry() else {
+            return Vec::new();
+        };
+        snapshot
+            .native_indices
+            .keys()
+            .map(|&id| {
+                let idx = snapshot.native_indices[&id];
+                let shard = &snapshot.graph[idx];
+                let label = shard.label();
+                let deps = shard.dependencies();
+                (id, label, deps)
+            })
+            .collect()
+    }
+
+    /// Returns the stored startup report summary (available after `start()` completes).
+    pub fn get_startup_report(&self) -> Option<&StoredStartupReport> {
+        let ptr = self.startup_report.load(Ordering::Acquire);
+        if ptr.is_null() {
+            None
+        } else {
+            unsafe { Some(&*ptr) }
+        }
+    }
+
     fn snapshot_registry(&self) -> Option<Arc<ShardRegistry>> {
         let ptr = self.registry.load(Ordering::Acquire);
 
@@ -355,6 +416,15 @@ impl Drop for Jax {
             // SAFETY: ptr was created by Arc::into_raw in build()
             unsafe {
                 drop(Arc::from_raw(ptr));
+            }
+        }
+
+        let report_ptr = self
+            .startup_report
+            .swap(core::ptr::null_mut(), Ordering::AcqRel);
+        if !report_ptr.is_null() {
+            unsafe {
+                drop(Box::from_raw(report_ptr));
             }
         }
     }

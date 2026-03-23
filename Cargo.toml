@@ -15,5 +15,8 @@ uuid = { version = "1.22.0", features = ["v4"] }
 futures = { version = "0.3.32", default-features = false, features = ["alloc"] }
 downcast-rs = { version = "2.0.2", default-features = false, features = ["sync"] }
 
+[features]
+setup-timing = []
+
 [lints.clippy]
 unwrap_used = "deny"
