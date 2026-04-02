@@ -1,4 +1,4 @@
-use crate::ShardGraph;
+use crate::registry::ShardGraph;
 use crate::shard::Shard;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -69,7 +69,7 @@ impl<'a> ShardScheduler<'a> {
         let node_idx = NodeIndex::new(idx);
 
         for child_idx in self.graph.neighbors_directed(node_idx, Outgoing) {
-            let c_i = child_idx.index();
+            let c_i: usize = child_idx.index();
             // Atomic subtraction: the last thread to complete dependencies is responsible for activation
             if self.in_degrees[c_i].fetch_sub(1, Ordering::AcqRel) == 1 && self.try_activate(c_i) {
                 newly_ready.push((Arc::clone(&self.graph[child_idx]), c_i));
@@ -89,7 +89,7 @@ impl<'a> ShardScheduler<'a> {
     /// Recursive pruning: mark all downstream as SKIPPED
     fn propagate_skip(&self, node_idx: NodeIndex, skipped: &mut Vec<uuid::Uuid>) {
         for child_idx in self.graph.neighbors_directed(node_idx, Outgoing) {
-            let c_i = child_idx.index();
+            let c_i: usize = child_idx.index();
             let old = self.states[c_i].fetch_or(SKIPPED, Ordering::AcqRel);
 
             // If not previously marked as SKIPPED, continue recursion

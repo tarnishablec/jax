@@ -1,0 +1,20 @@
+[package]
+name = "jax-probes"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+jax.workspace = true
+uuid.workspace = true
+async-trait.workspace = true
+spin = { version = "0.10.0", default-features = false, features = ["rwlock"] }
+
+[features]
+default = ["std"]
+std = []
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "time"] }
+
+[lints]
+workspace = true

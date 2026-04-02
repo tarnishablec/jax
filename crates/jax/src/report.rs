@@ -1,8 +1,6 @@
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::error::Error;
-use core::time::Duration;
 use uuid::Uuid;
 
 pub struct ShardError {
@@ -16,8 +14,6 @@ pub struct StartupReport {
     pub failed: Vec<ShardError>,
     /// Shards that were skipped because their dependencies failed.
     pub skipped: Vec<Uuid>,
-    /// Per-shard setup durations (populated when `setup-timing` feature is enabled).
-    pub durations: BTreeMap<Uuid, Duration>,
 }
 
 impl StartupReport {
@@ -32,5 +28,4 @@ impl StartupReport {
 pub struct StoredStartupReport {
     pub failed_ids: Vec<Uuid>,
     pub skipped: Vec<Uuid>,
-    pub durations: BTreeMap<Uuid, Duration>,
 }
