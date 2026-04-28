@@ -54,17 +54,8 @@ impl Jax {
         self
     }
 
-    /// Register a typed shard. Must be called before `start()`.
-    pub fn register<T: TypedShard>(mut self, shard: Arc<T>) -> Self {
-        self.pending.push(shard);
-        self
-    }
-
-    /// Register an already-erased shard. Must be called before `start()`.
-    ///
-    /// This is the extension point used by runtime adapters such as wasm
-    /// loaders. Core Jax still treats the shard exactly like any other shard.
-    pub fn register_shard(mut self, shard: Arc<dyn Shard>) -> Self {
+    /// Register a shard. Must be called before `start()`.
+    pub fn register(mut self, shard: Arc<dyn Shard>) -> Self {
         self.pending.push(shard);
         self
     }
