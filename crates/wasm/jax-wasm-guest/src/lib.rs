@@ -20,10 +20,22 @@ wit_bindgen::generate!({
     default_bindings_module: "jax_wasm_guest",
 });
 
+pub mod jax_wit {
+    pub use crate::exports;
+
+    pub mod runtime {
+        pub use crate::jax::wit::runtime::*;
+    }
+
+    pub mod shard {
+        pub use crate::exports::jax::wit::shard::*;
+    }
+}
+
 pub mod wasm {
     pub use crate::Jax;
     pub use crate::WasmShard;
-    pub use crate::exports::jax::wasm::shard::{Dependency, Descriptor};
+    pub use crate::jax_wit::shard::{Dependency, Descriptor};
 }
 
 pub type GuestError = Box<dyn Error + Send + Sync>;
@@ -39,6 +51,26 @@ impl Jax {
     pub fn current() -> &'static Self {
         &JAX
     }
+
+    pub fn call_raw(
+        &self,
+        shard_id: &str,
+        method: &str,
+        request_json: &str,
+    ) -> Result<String, String> {
+        jax_wit::runtime::call_shard(shard_id, method, request_json)
+    }
+
+    pub fn get_shard<'a, T>(&'a self) -> T
+    where
+        T: WasmShardClient<'a>,
+    {
+        T::from_jax(self)
+    }
+}
+
+pub trait WasmShardClient<'a>: Sized {
+    fn from_jax(jax: &'a Jax) -> Self;
 }
 
 pub trait WasmShard {
@@ -59,7 +91,7 @@ pub trait WasmShard {
     }
 }
 
-impl<T: WasmShard> exports::jax::wasm::shard::Guest for T {
+impl<T: WasmShard> crate::jax_wit::shard::Guest for T {
     fn describe() -> wasm::Descriptor {
         T::describe()
     }

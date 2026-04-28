@@ -2,7 +2,7 @@
 
 use example_wasm_typed_shard::LogShard;
 use jax::Jax;
-use jax_wasm_host::WasmShardLoader;
+use jax_wasm_host::{WasmHostExports, WasmShardLoader};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,14 +15,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .map(PathBuf::from)
         .unwrap_or_else(default_wasm_path);
 
-    let jax = Jax::default().register(Arc::new(LogShard)).build()?;
+    let log_shard = Arc::new(LogShard);
+    let jax = Jax::default().register(log_shard.clone()).build()?;
     let jax = Arc::new(jax);
 
     let report = jax.start().await?;
     assert!(report.is_success());
 
     let logger = jax.get_shard::<LogShard>();
-    logger.log(Level::INFO, "host app started");
+    logger.log(Level::INFO, "host app started".into());
 
     let loader = WasmShardLoader::new()?;
     let module = loader.load_from_file(&wasm_path).await?;
@@ -38,12 +39,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .validate(&config)
         .map_err(|error| error.to_string())?;
 
-    let wasm_shard = module.instantiate_with_config(&config)?;
+    let exports = Arc::new(WasmHostExports::new().with_export(log_shard));
+    let wasm_shard = module.instantiate_with_config_on(Arc::clone(&jax), exports, &config)?;
     let wasm_shard_id = wasm_shard.descriptor().id();
     jax.mount(wasm_shard).await?;
-    logger.log(Level::INFO, "wasm shard mounted");
+    logger.log(Level::INFO, "wasm shard mounted".into());
     jax.unmount(wasm_shard_id).await?;
-    logger.log(Level::INFO, "wasm shard unmounted");
+    logger.log(Level::INFO, "wasm shard unmounted".into());
 
     jax.stop().await?;
     Ok(())

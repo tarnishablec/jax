@@ -8,6 +8,7 @@ name = "jax_wasm_guest"
 crate-type = ["rlib"]
 
 [dependencies]
+jax-wasm.workspace = true
 jax-wasm-abi.workspace = true
 schemars.workspace = true
 serde.workspace = true

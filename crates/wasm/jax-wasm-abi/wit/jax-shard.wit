@@ -1,4 +1,8 @@
-package jax:wasm@0.1.0;
+package jax:wit@0.1.0;
+
+interface runtime {
+  call-shard: func(shard-id: string, method: string, request-json: string) -> result<string, string>;
+}
 
 interface shard {
   record dependency {
@@ -19,5 +23,6 @@ interface shard {
 }
 
 world jax-shard {
+  import runtime;
   export shard;
 }

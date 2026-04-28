@@ -9,9 +9,9 @@ pub struct LogShard;
 
 static TRACING_INIT: Once = Once::new();
 
+#[jax_wasm::export]
 impl LogShard {
-    pub fn log(&self, level: Level, message: impl AsRef<str>) {
-        let message = message.as_ref();
+    pub fn log(&self, level: Level, message: String) {
         match level {
             Level::TRACE => tracing::trace!(target: "example_wasm_typed_shard", "{}", message),
             Level::DEBUG => tracing::debug!(target: "example_wasm_typed_shard", "{}", message),
@@ -39,12 +39,12 @@ impl Shard for LogShard {
                 .with_target(false)
                 .try_init();
         });
-        self.log(Level::INFO, "example typed shard setup");
+        self.log(Level::INFO, "example typed shard setup".into());
         Ok(())
     }
 
     async fn teardown(&self, _jax: Arc<Jax>) -> JaxResult<()> {
-        self.log(Level::INFO, "example typed shard teardown");
+        self.log(Level::INFO, "example typed shard teardown".into());
         Ok(())
     }
 }

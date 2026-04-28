@@ -4,6 +4,9 @@ use jax_wasm_guest::export_shard;
 use jax_wasm_guest::wasm::{Descriptor, Jax, WasmShard};
 use schemars::JsonSchema;
 use serde::Deserialize;
+use tracing::Level;
+
+jax_wasm::import!(example_wasm_typed_shard::LogShard);
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -32,11 +35,15 @@ impl WasmShard for ExampleGuestShard {
         Ok(())
     }
 
-    fn setup(_jax: &Jax) -> Result<(), String> {
+    fn setup(jax: &Jax) -> Result<(), String> {
+        let logger = jax.get_shard::<LogShard>();
+        logger.log(Level::INFO, "example WASM shard setup".into())?;
         Ok(())
     }
 
-    fn teardown(_jax: &Jax) -> Result<(), String> {
+    fn teardown(jax: &Jax) -> Result<(), String> {
+        let logger = jax.get_shard::<LogShard>();
+        logger.log(Level::INFO, "example WASM shard teardown".into())?;
         Ok(())
     }
 }

@@ -663,9 +663,12 @@ dependencies = [
 name = "example-wasm-shard"
 version = "0.1.0"
 dependencies = [
+ "example-wasm-typed-shard",
+ "jax-wasm",
  "jax-wasm-guest",
  "schemars",
  "serde",
+ "tracing",
 ]
 
 [[package]]
@@ -674,6 +677,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "jax",
+ "jax-wasm",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1315,6 +1319,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jax-wasm"
+version = "0.2.0"
+dependencies = [
+ "jax-wasm-macros",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "jax-wasm-abi"
 version = "0.2.0"
 dependencies = [
@@ -1325,6 +1338,7 @@ dependencies = [
 name = "jax-wasm-guest"
 version = "0.2.0"
 dependencies = [
+ "jax-wasm",
  "jax-wasm-abi",
  "schemars",
  "serde",
@@ -1338,10 +1352,20 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "jax",
+ "jax-wasm",
  "serde",
  "serde_json",
  "wasmtime",
  "wasmtime-wasi",
+]
+
+[[package]]
+name = "jax-wasm-macros"
+version = "0.2.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

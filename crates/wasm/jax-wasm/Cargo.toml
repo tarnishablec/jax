@@ -1,0 +1,16 @@
+[package]
+name = "jax-wasm"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "jax_wasm"
+crate-type = ["rlib"]
+
+[dependencies]
+jax-wasm-macros.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
