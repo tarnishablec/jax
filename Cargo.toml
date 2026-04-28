@@ -6,6 +6,8 @@ members = [
     "crates/wasm/jax-wasm-abi",
     "crates/wasm/jax-wasm-guest",
     "crates/wasm/jax-wasm-host",
+    "examples/wasm-shard/guest-shard",
+    "examples/wasm-shard/host-app",
 ]
 
 [workspace.package]
@@ -15,9 +17,15 @@ version = "0.2.0"
 [workspace.dependencies]
 jax = { path = "crates/jax" }
 jax-wasm-abi = { path = "crates/wasm/jax-wasm-abi" }
-uuid = { version = "1.23.0", features = ["v4"] }
-async-trait = "0.1.89"
-futures = { version = "0.3.32", default-features = false, features = ["alloc"] }
+jax-wasm-guest = { path = "crates/wasm/jax-wasm-guest" }
+jax-wasm-host = { path = "crates/wasm/jax-wasm-host" }
+uuid = { version = "1", features = ["v4"] }
+async-trait = "0.1"
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
+downcast-rs = { version = "2", default-features = false }
+petgraph = { version = "0.8", default-features = false }
+spin = { version = "0.10", default-features = false }
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

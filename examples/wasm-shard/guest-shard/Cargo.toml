@@ -1,0 +1,12 @@
+[package]
+name = "example-wasm-shard"
+edition = "2024"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+jax-wasm-abi.workspace = true
+jax-wasm-guest.workspace = true
+uuid.workspace = true

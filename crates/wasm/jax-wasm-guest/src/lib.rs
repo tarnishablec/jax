@@ -20,7 +20,7 @@ impl Context {
     }
 }
 
-pub trait Shard {
+pub trait WasmShard {
     fn setup(_context: Context) -> GuestResult<()> {
         Ok(())
     }

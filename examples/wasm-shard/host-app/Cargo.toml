@@ -1,0 +1,9 @@
+[package]
+name = "example-wasm-host-app"
+edition = "2024"
+version = "0.1.0"
+
+[dependencies]
+jax.workspace = true
+jax-wasm-host.workspace = true
+tokio.workspace = true
