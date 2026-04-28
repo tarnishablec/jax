@@ -22,9 +22,9 @@ host-app/
 2. The guest shard exports descriptor, JSON config schema, configuration, and lifecycle functions described by `jax-shard.wit`.
 3. The typed shard marks wasm-visible methods with `#[jax_wasm::export]`.
 4. The guest imports that capability with `jax_wasm::import!(example_wasm_typed_shard::LogShard)`.
-5. The application builds and starts Jax with the typed shard registered.
+5. The application enables wasm hosting with `.with_wasm()`, then registers the typed shard.
 6. The host loader reads the wasm file and creates a reusable wasm shard module.
-7. The application reads the module config schema and instantiates that module with host exports.
+7. The application reads the module config schema and instantiates that module through the wasm-aware Jax wrapper.
 8. The application mounts the resulting `Arc<dyn jax::Shard>` into the running Jax instance.
 9. The wasm shard can call the exported typed shard capability during setup and teardown.
 10. The application can unmount the wasm shard before shutting down the typed shard.

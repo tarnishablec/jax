@@ -13,9 +13,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .map(PathBuf::from)
         .unwrap_or_else(default_wasm_path);
 
-    let log_shard = Arc::new(LogShard);
-    let jax = Jax::default().register(log_shard.clone()).build()?;
-    let jax = Arc::new(jax);
+    let jax = Jax::default()
+        .with_wasm()
+        .register(Arc::new(LogShard))
+        .build()?;
 
     let report = jax.start().await?;
     assert!(report.is_success());
@@ -23,8 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let logger = jax.get_shard::<LogShard>();
     logger.log(Level::INFO, "host app started".into());
 
-    let loader = WasmShardLoader::new()?;
-    let module = loader.load_from_file(&wasm_path).await?;
+    let module = jax.load_wasm_from_file(&wasm_path).await?;
     let schema = module.config_schema()?;
     jsonschema::meta::validate(&schema).map_err(|error| error.to_string())?;
 
@@ -37,8 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .validate(&config)
         .map_err(|error| error.to_string())?;
 
-    let exports = Arc::new(WasmHostExports::new().with_export(log_shard));
-    let wasm_shard = module.instantiate_with_config_on(Arc::clone(&jax), exports, &config)?;
+    let wasm_shard = jax.instantiate_wasm_with_config(&module, &config)?;
     let wasm_shard_id = wasm_shard.descriptor().id();
     jax.mount(wasm_shard).await?;
     logger.log(Level::INFO, "wasm shard mounted".into());

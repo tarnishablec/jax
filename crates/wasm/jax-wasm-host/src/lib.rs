@@ -4,6 +4,7 @@ extern crate jax as jax_core;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::error::Error;
+use jax_core::report::{StartupReport, StoredStartupReport};
 use jax_core::{Dependency, Descriptor, Jax, JaxResult, Shard, ShardId};
 use jax_wasm_contract::WasmExport;
 use serde::Serialize;
@@ -71,6 +72,99 @@ pub struct WasmShardLoader {
 pub struct WasmShardModule {
     engine: Engine,
     component: Component,
+}
+
+pub trait JaxWasmExt {
+    fn with_wasm(self) -> WasmJaxBuilder;
+}
+
+impl JaxWasmExt for Jax {
+    fn with_wasm(self) -> WasmJaxBuilder {
+        WasmJaxBuilder::new(self)
+    }
+}
+
+pub struct WasmJaxBuilder {
+    jax: Jax,
+    exports: WasmHostExports,
+}
+
+impl WasmJaxBuilder {
+    pub fn new(jax: Jax) -> Self {
+        Self {
+            jax,
+            exports: WasmHostExports::new(),
+        }
+    }
+
+    pub fn register<T>(mut self, shard: Arc<T>) -> Self
+    where
+        T: Shard + WasmExport,
+    {
+        self.exports.insert(Arc::clone(&shard));
+        self.jax = self.jax.register(shard);
+        self
+    }
+
+    pub fn build(self) -> JaxResult<WasmJax> {
+        Ok(WasmJax {
+            jax: Arc::new(self.jax.build()?),
+            loader: WasmShardLoader::new()?,
+            exports: Arc::new(self.exports),
+        })
+    }
+}
+
+pub struct WasmJax {
+    jax: Arc<Jax>,
+    loader: WasmShardLoader,
+    exports: Arc<WasmHostExports>,
+}
+
+impl WasmJax {
+    pub fn jax(&self) -> &Arc<Jax> {
+        &self.jax
+    }
+
+    pub async fn start(&self) -> JaxResult<StartupReport> {
+        self.jax.start().await
+    }
+
+    pub async fn stop(&self) -> JaxResult<()> {
+        self.jax.stop().await
+    }
+
+    pub fn get_shard<T: jax_core::TypedShard>(&self) -> Arc<T> {
+        self.jax.get_shard::<T>()
+    }
+
+    pub async fn mount(&self, shard: Arc<dyn Shard>) -> JaxResult<()> {
+        self.jax.mount(shard).await
+    }
+
+    pub async fn unmount(&self, shard_id: ShardId) -> JaxResult<()> {
+        self.jax.unmount(shard_id).await
+    }
+
+    pub fn get_startup_report(&self) -> Option<&StoredStartupReport> {
+        self.jax.get_startup_report()
+    }
+
+    pub async fn load_wasm_from_file(&self, path: impl AsRef<Path>) -> JaxResult<WasmShardModule> {
+        self.loader.load_from_file(path).await
+    }
+
+    pub async fn load_wasm_from_bytes(&self, bytes: &[u8]) -> JaxResult<WasmShardModule> {
+        self.loader.load_from_bytes(bytes).await
+    }
+
+    pub fn instantiate_wasm_with_config<T: Serialize + ?Sized>(
+        &self,
+        module: &WasmShardModule,
+        config: &T,
+    ) -> JaxResult<Arc<dyn Shard>> {
+        module.instantiate_with_config_on(Arc::clone(&self.jax), Arc::clone(&self.exports), config)
+    }
 }
 
 #[derive(Default)]

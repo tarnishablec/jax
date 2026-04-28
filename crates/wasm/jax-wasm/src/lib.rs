@@ -13,10 +13,10 @@ pub mod prelude {
     pub use tracing::Level;
 
     #[cfg(feature = "guest")]
-    pub use crate::guest::wasm_shard;
-    #[cfg(feature = "guest")]
     pub use crate::guest::wasm::{Dependency, Descriptor, Jax, WasmShard};
+    #[cfg(feature = "guest")]
+    pub use crate::guest::wasm_shard;
     #[cfg(feature = "host")]
-    pub use crate::host::{WasmHostExports, WasmShardLoader};
+    pub use crate::host::{JaxWasmExt, WasmJax, WasmJaxBuilder, WasmShardLoader};
     pub use crate::{export, import};
 }
