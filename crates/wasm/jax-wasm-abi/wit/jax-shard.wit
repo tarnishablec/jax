@@ -1,10 +1,23 @@
-package jax:shard@0.1.0;
+package jax:wasm@0.1.0;
 
 interface host {
   log: func(level: string, message: string);
 }
 
 interface shard {
+  record dependency {
+    id: string,
+  }
+
+  record descriptor {
+    id: string,
+    label: string,
+    dependencies: list<dependency>,
+  }
+
+  describe: func() -> descriptor;
+  config-schema: func() -> string;
+  configure: func(config: string) -> result<_, string>;
   setup: func() -> result<_, string>;
   teardown: func() -> result<_, string>;
 }

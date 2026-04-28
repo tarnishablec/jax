@@ -5,7 +5,6 @@ version.workspace = true
 
 [dependencies]
 jax.workspace = true
-uuid.workspace = true
 async-trait.workspace = true
 spin = { workspace = true, features = ["rwlock"] }
 

@@ -1,5 +1,5 @@
 use crate::registry::ShardGraph;
-use crate::shard::Shard;
+use crate::shard::{Shard, ShardId};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
@@ -77,7 +77,7 @@ impl<'a> ShardScheduler<'a> {
     }
 
     /// Core logic: Upstream failure
-    pub fn notify_failure(&self, idx: usize) -> Vec<uuid::Uuid> {
+    pub fn notify_failure(&self, idx: usize) -> Vec<ShardId> {
         self.states[idx].fetch_or(FAILED, Ordering::Release);
         let mut skipped_ids = Vec::new();
         self.propagate_skip(NodeIndex::new(idx), &mut skipped_ids);
@@ -85,7 +85,7 @@ impl<'a> ShardScheduler<'a> {
     }
 
     /// Recursive pruning: mark all downstream as SKIPPED
-    fn propagate_skip(&self, node_idx: NodeIndex, skipped: &mut Vec<uuid::Uuid>) {
+    fn propagate_skip(&self, node_idx: NodeIndex, skipped: &mut Vec<ShardId>) {
         for child_idx in self.graph.neighbors_directed(node_idx, Outgoing) {
             let c_i: usize = child_idx.index();
             let old = self.states[c_i].fetch_or(SKIPPED, Ordering::AcqRel);

@@ -10,6 +10,11 @@ pub mod report;
 mod runtime;
 pub mod shard;
 
+#[doc(hidden)]
+pub mod __private {
+    pub use uuid;
+}
+
 pub use crate::error::{JaxError, JaxResult};
 pub use crate::runtime::Jax;
-pub use crate::shard::{Shard, ShardDependency, ShardDescriptor, TypedShard};
+pub use crate::shard::{Dependency, Descriptor, Shard, ShardId, TypedShard};

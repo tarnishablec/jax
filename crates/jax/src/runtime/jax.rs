@@ -2,7 +2,7 @@ use crate::config::JaxConfig;
 use crate::probe::Probe;
 use crate::registry::{RegistryHandle, ShardRegistry};
 use crate::report::StoredStartupReport;
-use crate::shard::{Shard, TypedShard};
+use crate::shard::{Shard, ShardId, TypedShard};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -12,7 +12,7 @@ use core::any::type_name;
 use core::error::Error;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use petgraph::prelude::*;
-use uuid::Uuid;
+use petgraph::visit::EdgeRef;
 
 /// Core application context.
 ///
@@ -60,17 +60,22 @@ impl Jax {
         self
     }
 
+    /// Register an already-erased shard. Must be called before `start()`.
+    ///
+    /// This is the extension point used by runtime adapters such as wasm
+    /// loaders. Core Jax still treats the shard exactly like any other shard.
+    pub fn register_shard(mut self, shard: Arc<dyn Shard>) -> Self {
+        self.pending.push(shard);
+        self
+    }
+
     /// Finalizes the registry by building the dependency graph.
     pub fn build(mut self) -> Result<Self, Box<dyn Error + Send + Sync>> {
         if self.pending.is_empty() {
             return Ok(self);
         }
 
-        let (mut graph, mut indices) = if let Some(snapshot) = self.registry.snapshot() {
-            (snapshot.graph.clone(), snapshot.indices.clone())
-        } else {
-            (StableDiGraph::new(), BTreeMap::new())
-        };
+        let (mut graph, mut indices) = self.registry_graph_parts();
 
         let new_shards: Vec<Arc<dyn Shard>> = self.pending.drain(..).collect();
         let mut new_node_indices = Vec::with_capacity(new_shards.len());
@@ -153,7 +158,7 @@ impl Jax {
     }
 
     /// Returns all registered shard IDs, labels, and dependency lists.
-    pub fn list_shards(&self) -> Vec<(Uuid, String, Vec<Uuid>)> {
+    pub fn list_shards(&self) -> Vec<(ShardId, String, Vec<ShardId>)> {
         let Some(snapshot) = self.registry.snapshot() else {
             return Vec::new();
         };
@@ -172,6 +177,111 @@ impl Jax {
                 (id, label, deps)
             })
             .collect()
+    }
+
+    /// Mount a shard at runtime and immediately run its setup lifecycle.
+    pub async fn mount(
+        self: &Arc<Self>,
+        shard: Arc<dyn Shard>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let shard_id = shard.descriptor().id();
+        let (mut graph, mut indices) = self.registry_graph_parts();
+
+        if indices.contains_key(&shard_id) {
+            return Err(
+                alloc::format!("Jax: Shard [{}] already exists in registry", shard_id).into(),
+            );
+        }
+
+        let dependencies = shard.descriptor().dependencies().to_vec();
+        let shard_idx = graph.add_node(Arc::clone(&shard));
+        indices.insert(shard_id, shard_idx);
+
+        for dependency in dependencies {
+            let dep_id = dependency.id();
+            if let Some(&provider_idx) = indices.get(&dep_id) {
+                graph.add_edge(provider_idx, shard_idx, ());
+            } else {
+                return Err(alloc::format!(
+                    "Jax: Missing dependency [{}] for mounted shard [{}]",
+                    dep_id,
+                    shard_id
+                )
+                .into());
+            }
+        }
+
+        if petgraph::algo::is_cyclic_directed(&graph) {
+            return Err("Jax: Mount failed due to circular dependency".into());
+        }
+
+        for probe in &self.config.probes {
+            probe.before_setup(shard.as_ref()).await?;
+        }
+
+        let setup_result = shard.setup(Arc::clone(self)).await;
+
+        for probe in &self.config.probes {
+            probe.after_setup(shard.as_ref(), &setup_result).await;
+        }
+
+        setup_result?;
+
+        self.registry
+            .swap(Arc::new(ShardRegistry { graph, indices }));
+
+        Ok(())
+    }
+
+    /// Unmount a shard at runtime after running its teardown lifecycle.
+    ///
+    /// This conservative operation refuses to unmount a shard that still has
+    /// dependents in the registry.
+    pub async fn unmount(
+        self: &Arc<Self>,
+        shard_id: ShardId,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let snapshot = self.registry.snapshot().ok_or("Jax: Registry null")?;
+        let mut graph = snapshot.graph.clone();
+        let mut indices = snapshot.indices.clone();
+        let shard_idx = *indices
+            .get(&shard_id)
+            .ok_or_else(|| alloc::format!("Jax: Shard [{}] not found", shard_id))?;
+
+        let dependents: Vec<ShardId> = graph
+            .edges_directed(shard_idx, Outgoing)
+            .map(|edge| graph[edge.target()].descriptor().id())
+            .collect();
+        if !dependents.is_empty() {
+            return Err(alloc::format!(
+                "Jax: Cannot unmount shard [{}] while dependents remain: {:?}",
+                shard_id,
+                dependents
+            )
+            .into());
+        }
+
+        let shard = graph[shard_idx].clone();
+
+        for probe in &self.config.probes {
+            probe.before_teardown(shard.as_ref()).await;
+        }
+
+        let teardown_result = shard.teardown(Arc::clone(self)).await;
+
+        for probe in &self.config.probes {
+            probe.after_teardown(shard.as_ref(), &teardown_result).await;
+        }
+
+        teardown_result?;
+
+        graph.remove_node(shard_idx);
+        indices.remove(&shard_id);
+
+        self.registry
+            .swap(Arc::new(ShardRegistry { graph, indices }));
+
+        Ok(())
     }
 
     /// Returns the stored startup report summary (available after `start()` completes).
@@ -194,6 +304,21 @@ impl Drop for Jax {
             unsafe {
                 drop(Box::from_raw(report_ptr));
             }
+        }
+    }
+}
+
+impl Jax {
+    fn registry_graph_parts(
+        &self,
+    ) -> (
+        StableDiGraph<Arc<dyn Shard>, ()>,
+        BTreeMap<ShardId, NodeIndex>,
+    ) {
+        if let Some(snapshot) = self.registry.snapshot() {
+            (snapshot.graph.clone(), snapshot.indices.clone())
+        } else {
+            (StableDiGraph::new(), BTreeMap::new())
         }
     }
 }

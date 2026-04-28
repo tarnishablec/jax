@@ -2,7 +2,7 @@
 ///
 /// # Example
 /// ```
-/// use jax::{shard_id, Shard, ShardDescriptor, TypedShard};
+/// use jax::{shard_id, Shard, Descriptor, TypedShard};
 ///
 /// struct MyShard;
 ///
@@ -11,19 +11,19 @@
 /// }
 ///
 /// impl Shard for MyShard {
-///     fn descriptor(&self) -> ShardDescriptor {
-///         ShardDescriptor::typed::<Self>()
+///     fn descriptor(&self) -> Descriptor {
+///         Descriptor::typed::<Self>()
 ///     }
 /// }
 /// ```
 #[macro_export]
 macro_rules! shard_id {
     ($uuid:expr) => {
-        fn static_id() -> uuid::Uuid
+        fn static_id() -> $crate::ShardId
         where
             Self: Sized,
         {
-            uuid::uuid!($uuid)
+            $crate::ShardId::from($crate::__private::uuid::uuid!($uuid))
         }
     };
 }
@@ -32,7 +32,7 @@ macro_rules! shard_id {
 macro_rules! depends {
     ($($shard:ty),* $(,)?) => {
         vec![
-            $( $crate::ShardDependency::new(<$shard as $crate::TypedShard>::static_id()) ),*
+            $( $crate::Dependency::new(<$shard as $crate::TypedShard>::static_id()) ),*
         ]
     };
 }

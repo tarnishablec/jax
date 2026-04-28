@@ -8,8 +8,12 @@ name = "jax_wasm_host"
 crate-type = ["rlib"]
 
 [dependencies]
+async-trait.workspace = true
 jax.workspace = true
-jax-wasm-abi.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
 
 [lints]
 workspace = true

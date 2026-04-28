@@ -1,10 +1,10 @@
+use crate::shard::ShardId;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::error::Error;
-use uuid::Uuid;
 
 pub struct ShardError {
-    pub id: Uuid,
+    pub id: ShardId,
     pub error: Box<dyn Error + Send + Sync>,
 }
 
@@ -13,7 +13,7 @@ pub struct StartupReport {
     /// Shards that failed due to their own setup logic.
     pub failed: Vec<ShardError>,
     /// Shards that were skipped because their dependencies failed.
-    pub skipped: Vec<Uuid>,
+    pub skipped: Vec<ShardId>,
 }
 
 impl StartupReport {
@@ -26,6 +26,6 @@ impl StartupReport {
 /// Unlike `StartupReport`, this does not carry `Box<dyn Error>`.
 #[derive(Default)]
 pub struct StoredStartupReport {
-    pub failed_ids: Vec<Uuid>,
-    pub skipped: Vec<Uuid>,
+    pub failed_ids: Vec<ShardId>,
+    pub skipped: Vec<ShardId>,
 }

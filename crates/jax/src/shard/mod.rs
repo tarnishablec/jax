@@ -2,5 +2,5 @@ mod descriptor;
 mod macros;
 mod traits;
 
-pub use descriptor::{ShardDependency, ShardDescriptor};
+pub use descriptor::{Dependency, Descriptor, ShardId};
 pub use traits::{Shard, TypedShard};

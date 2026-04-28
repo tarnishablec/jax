@@ -7,6 +7,6 @@ version = "0.1.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-jax-wasm-abi.workspace = true
 jax-wasm-guest.workspace = true
-uuid.workspace = true
+schemars.workspace = true
+serde.workspace = true

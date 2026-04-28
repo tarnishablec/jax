@@ -1,30 +1,70 @@
-//! Example host application.
-//!
-//! This file shows the intended host-side shape. `load_from_bytes` currently
-//! returns an unimplemented error until the wasm component loader is wired.
+//! Example host application loading a wasm component shard into Jax.
 
-use jax::Jax;
+use jax::{Descriptor, Jax, JaxResult, Shard, TypedShard, shard_id};
 use jax_wasm_host::WasmShardLoader;
+use serde_json::json;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let loader = WasmShardLoader::new();
-    let bytes = std::fs::read(
-        "../guest-shard/target/wasm32-unknown-unknown/release/example_wasm_shard.wasm",
-    )?;
-    let shard = loader.load_from_bytes(&bytes).await?;
+    let wasm_path = std::env::args_os()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(default_wasm_path);
 
-    let jax = Jax::default().build()?;
+    let jax = Jax::default().register(Arc::new(NativeShard)).build()?;
     let jax = Arc::new(jax);
-
-    // Future core API:
-    // jax.load_shard(shard).await?;
-    drop(shard);
 
     let report = jax.start().await?;
     assert!(report.is_success());
 
+    let loader = WasmShardLoader::new()?;
+    let module = loader.load_from_file(&wasm_path).await?;
+    let schema = module.config_schema()?;
+    jsonschema::meta::validate(&schema).map_err(|error| error.to_string())?;
+
+    let config = json!({
+        "greeting": "hello from host config",
+        "verbose": true,
+    });
+    let validator = jsonschema::validator_for(&schema)?;
+    validator
+        .validate(&config)
+        .map_err(|error| error.to_string())?;
+
+    let wasm_shard = module.instantiate_with_config(&config)?;
+    let wasm_shard_id = wasm_shard.descriptor().id();
+    jax.mount(wasm_shard).await?;
+    jax.unmount(wasm_shard_id).await?;
+
     jax.stop().await?;
     Ok(())
+}
+
+fn default_wasm_path() -> PathBuf {
+    PathBuf::from("target/wasm32-wasip2/release/example_wasm_shard.wasm")
+}
+
+struct NativeShard;
+
+impl TypedShard for NativeShard {
+    shard_id!("2b30e84e-17eb-4ff9-ac96-40c9e40f8462");
+}
+
+#[async_trait::async_trait]
+impl Shard for NativeShard {
+    fn descriptor(&self) -> Descriptor {
+        Descriptor::typed::<Self>().with_label("example-native-shard")
+    }
+
+    async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
+        println!("[native:info] example native shard setup");
+        Ok(())
+    }
+
+    async fn teardown(&self, _jax: Arc<Jax>) -> JaxResult<()> {
+        println!("[native:info] example native shard teardown");
+        Ok(())
+    }
 }

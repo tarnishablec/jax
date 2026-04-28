@@ -1,12 +1,11 @@
-use crate::shard::Shard;
+use crate::shard::{Shard, ShardId};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use petgraph::prelude::*;
-use uuid::Uuid;
 
 pub(crate) type ShardGraph = StableDiGraph<Arc<dyn Shard>, ()>;
 
 pub(crate) struct ShardRegistry {
     pub(crate) graph: ShardGraph,
-    pub(crate) indices: BTreeMap<Uuid, NodeIndex>,
+    pub(crate) indices: BTreeMap<ShardId, NodeIndex>,
 }

@@ -11,9 +11,13 @@ pub const MANIFEST_CUSTOM_SECTION: &str = "jax.shard.manifest";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ShardManifest {
+    /// Stable runtime identity for the shard contained in this artifact.
     id: Uuid,
+    /// Human-readable label aligned with the runtime descriptor label.
     label: String,
+    /// Runtime dependency IDs aligned with the core descriptor dependency model.
     dependencies: Vec<ShardManifestDependency>,
+    /// Load-time capabilities requested by this wasm artifact.
     permissions: PermissionManifest,
 }
 
@@ -56,6 +60,7 @@ impl ShardManifest {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ShardManifestDependency {
+    /// Stable runtime ID of another shard required by this artifact.
     id: Uuid,
 }
 
@@ -71,8 +76,11 @@ impl ShardManifestDependency {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PermissionManifest {
+    /// Whether this artifact requests WASI host imports.
     wasi: bool,
+    /// Filesystem access requested by this artifact.
     filesystem: FilesystemPermission,
+    /// Whether this artifact requests outbound network access.
     network: bool,
 }
 

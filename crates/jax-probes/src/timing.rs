@@ -4,9 +4,8 @@ use async_trait::async_trait;
 use core::error::Error;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
-use jax::Shard;
 use jax::probe::Probe;
-use uuid::Uuid;
+use jax::{Shard, ShardId};
 
 /// A probe that records per-shard setup durations.
 ///
@@ -27,8 +26,8 @@ pub struct TimingProbe {
     /// Stores start timestamps keyed by shard index.
     /// Using a simple atomic slot per-shard would be ideal,
     /// but we use a fixed-size array approach via AtomicU64 map.
-    starts: spin::RwLock<BTreeMap<Uuid, AtomicU64>>,
-    durations: spin::RwLock<BTreeMap<Uuid, Duration>>,
+    starts: spin::RwLock<BTreeMap<ShardId, AtomicU64>>,
+    durations: spin::RwLock<BTreeMap<ShardId, Duration>>,
 }
 
 impl TimingProbe {
@@ -49,7 +48,7 @@ impl TimingProbe {
     }
 
     /// Returns a snapshot of all recorded durations.
-    pub fn durations(&self) -> BTreeMap<Uuid, Duration> {
+    pub fn durations(&self) -> BTreeMap<ShardId, Duration> {
         self.durations.read().clone()
     }
 }
@@ -93,7 +92,7 @@ mod tests {
     use super::*;
     use alloc::vec;
     use core::sync::atomic::AtomicU64;
-    use jax::{Jax, ShardDescriptor, TypedShard, depends, shard_id};
+    use jax::{Descriptor, Jax, TypedShard, depends, shard_id};
     use std::sync::Arc;
 
     struct FakeShard;
@@ -104,8 +103,8 @@ mod tests {
 
     #[async_trait]
     impl Shard for FakeShard {
-        fn descriptor(&self) -> ShardDescriptor {
-            ShardDescriptor::typed::<Self>()
+        fn descriptor(&self) -> Descriptor {
+            Descriptor::typed::<Self>()
         }
 
         async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -123,8 +122,8 @@ mod tests {
 
     #[async_trait]
     impl Shard for FailShard {
-        fn descriptor(&self) -> ShardDescriptor {
-            ShardDescriptor::typed::<Self>()
+        fn descriptor(&self) -> Descriptor {
+            Descriptor::typed::<Self>()
         }
 
         async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -140,8 +139,8 @@ mod tests {
 
     #[async_trait]
     impl Shard for DepShard {
-        fn descriptor(&self) -> ShardDescriptor {
-            ShardDescriptor::typed::<Self>().with_dependencies(depends![FakeShard])
+        fn descriptor(&self) -> Descriptor {
+            Descriptor::typed::<Self>().with_dependencies(depends![FakeShard])
         }
 
         async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
