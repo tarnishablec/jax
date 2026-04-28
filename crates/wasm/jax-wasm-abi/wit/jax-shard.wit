@@ -1,0 +1,15 @@
+package jax:shard@0.1.0;
+
+interface host {
+  log: func(level: string, message: string);
+}
+
+interface shard {
+  setup: func() -> result<_, string>;
+  teardown: func() -> result<_, string>;
+}
+
+world jax-shard {
+  import host;
+  export shard;
+}

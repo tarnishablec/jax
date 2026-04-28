@@ -54,13 +54,20 @@ impl TimingProbe {
     }
 }
 
+#[cfg(feature = "std")]
+impl Default for TimingProbe {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl Probe for TimingProbe {
     async fn before_setup(&self, shard: &dyn Shard) -> Result<(), Box<dyn Error + Send + Sync>> {
         let now = (self.now_ns)();
         self.starts
             .write()
-            .insert(shard.id(), AtomicU64::new(now));
+            .insert(shard.descriptor().id(), AtomicU64::new(now));
         Ok(())
     }
 
@@ -70,10 +77,11 @@ impl Probe for TimingProbe {
         _result: &Result<(), Box<dyn Error + Send + Sync>>,
     ) {
         let now = (self.now_ns)();
-        if let Some(start) = self.starts.read().get(&shard.id()) {
+        let shard_id = shard.descriptor().id();
+        if let Some(start) = self.starts.read().get(&shard_id) {
             let start_ns = start.load(Ordering::Relaxed);
             let elapsed = Duration::from_nanos(now.saturating_sub(start_ns));
-            self.durations.write().insert(shard.id(), elapsed);
+            self.durations.write().insert(shard_id, elapsed);
         }
     }
 }
@@ -85,14 +93,20 @@ mod tests {
     use super::*;
     use alloc::vec;
     use core::sync::atomic::AtomicU64;
-    use jax::{Jax, shard_id};
+    use jax::{Jax, ShardDescriptor, TypedShard, depends, shard_id};
     use std::sync::Arc;
 
     struct FakeShard;
 
+    impl TypedShard for FakeShard {
+        shard_id!("00000000-0000-0000-0000-000000000001");
+    }
+
     #[async_trait]
     impl Shard for FakeShard {
-        shard_id!("00000000-0000-0000-0000-000000000001");
+        fn descriptor(&self) -> ShardDescriptor {
+            ShardDescriptor::typed::<Self>()
+        }
 
         async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
             // simulate ~50ms of work
@@ -103,9 +117,15 @@ mod tests {
 
     struct FailShard;
 
+    impl TypedShard for FailShard {
+        shard_id!("00000000-0000-0000-0000-000000000002");
+    }
+
     #[async_trait]
     impl Shard for FailShard {
-        shard_id!("00000000-0000-0000-0000-000000000002");
+        fn descriptor(&self) -> ShardDescriptor {
+            ShardDescriptor::typed::<Self>()
+        }
 
         async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
             Err("boom".into())
@@ -114,21 +134,26 @@ mod tests {
 
     struct DepShard;
 
+    impl TypedShard for DepShard {
+        shard_id!("00000000-0000-0000-0000-000000000003");
+    }
+
     #[async_trait]
     impl Shard for DepShard {
-        shard_id!("00000000-0000-0000-0000-000000000003");
+        fn descriptor(&self) -> ShardDescriptor {
+            ShardDescriptor::typed::<Self>().with_dependencies(depends![FakeShard])
+        }
 
         async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
             tokio::time::sleep(Duration::from_millis(30)).await;
             Ok(())
         }
-
-        fn dependencies(&self) -> vec::Vec<Uuid> {
-            vec![FakeShard::static_id()]
-        }
     }
 
-    fn fake_clock() -> (impl Fn() -> u64 + Send + Sync + Clone + 'static, Arc<AtomicU64>) {
+    fn fake_clock() -> (
+        impl Fn() -> u64 + Send + Sync + Clone + 'static,
+        Arc<AtomicU64>,
+    ) {
         let counter = Arc::new(AtomicU64::new(0));
         let c = counter.clone();
         let f = move || c.load(Ordering::Relaxed);
@@ -172,9 +197,7 @@ mod tests {
 
         // Simulate after_setup at t=2000 (1ms later)
         counter.store(2_000_000, Ordering::Relaxed);
-        probe
-            .after_setup(&shard as &dyn Shard, &Ok(()))
-            .await;
+        probe.after_setup(&shard as &dyn Shard, &Ok(())).await;
 
         let durations = probe.durations();
         let elapsed = durations
@@ -217,13 +240,19 @@ mod tests {
 
         // shard_a: before at 0, after at 10ms
         counter.store(0, Ordering::Relaxed);
-        probe.before_setup(&shard_a as &dyn Shard).await.expect("ok");
+        probe
+            .before_setup(&shard_a as &dyn Shard)
+            .await
+            .expect("ok");
 
         counter.store(10_000_000, Ordering::Relaxed);
         probe.after_setup(&shard_a as &dyn Shard, &Ok(())).await;
 
         // shard_b: before at 10ms, after at 13ms
-        probe.before_setup(&shard_b as &dyn Shard).await.expect("ok");
+        probe
+            .before_setup(&shard_b as &dyn Shard)
+            .await
+            .expect("ok");
 
         counter.store(13_000_000, Ordering::Relaxed);
         probe.after_setup(&shard_b as &dyn Shard, &Ok(())).await;

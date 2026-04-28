@@ -1,20 +1,8 @@
-use crate::shard::Shard;
-use alloc::collections::BTreeMap;
+use super::ShardRegistry;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicPtr, Ordering};
-use petgraph::prelude::*;
-use uuid::Uuid;
 
-pub(crate) type ShardGraph = StableDiGraph<Arc<dyn Shard>, ()>;
-
-pub(crate) struct ShardRegistry {
-    pub(crate) graph: ShardGraph,
-    pub(crate) native_indices: BTreeMap<Uuid, NodeIndex>,
-    #[allow(dead_code)]
-    pub(crate) guest_indices: BTreeMap<Uuid, NodeIndex>,
-}
-
-/// Atomic pointer wrapper for safely sharing `ShardRegistry` across threads.
+/// Atomic pointer wrapper for sharing immutable registry snapshots.
 pub(crate) struct RegistryHandle(AtomicPtr<ShardRegistry>);
 
 impl Default for RegistryHandle {
@@ -36,7 +24,7 @@ impl RegistryHandle {
         }
     }
 
-    /// Atomically swap in a new registry, returning the old raw pointer.
+    /// Atomically swap in a new immutable registry snapshot.
     pub(crate) fn swap(&self, new: Arc<ShardRegistry>) {
         let new_ptr = Arc::into_raw(new).cast_mut();
         let old_ptr = self.0.swap(new_ptr, Ordering::AcqRel);

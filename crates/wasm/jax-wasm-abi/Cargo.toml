@@ -1,0 +1,14 @@
+[package]
+name = "jax-wasm-abi"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "jax_wasm_abi"
+crate-type = ["rlib"]
+
+[dependencies]
+uuid.workspace = true
+
+[lints]
+workspace = true

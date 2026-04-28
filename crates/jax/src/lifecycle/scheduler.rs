@@ -6,15 +6,13 @@ use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use petgraph::Direction::{Incoming, Outgoing};
 use petgraph::prelude::NodeIndex;
 
-// --- State Bitmasks ---
+// Transient state bitmasks for one startup scheduling run.
 pub const PENDING: u8 = 1 << 0;
 pub const READY: u8 = 1 << 1;
 pub const RUNNING: u8 = 1 << 2;
 pub const SUCCESS: u8 = 1 << 3;
 pub const FAILED: u8 = 1 << 4;
 pub const SKIPPED: u8 = 1 << 5;
-#[allow(dead_code)]
-pub const TIMEOUT: u8 = 1 << 6;
 pub const CANCELLED: u8 = 1 << 7;
 
 pub struct ShardScheduler<'a> {
@@ -94,7 +92,7 @@ impl<'a> ShardScheduler<'a> {
 
             // If not previously marked as SKIPPED, continue recursion
             if old & SKIPPED == 0 {
-                skipped.push(self.graph[child_idx].id());
+                skipped.push(self.graph[child_idx].descriptor().id());
                 self.propagate_skip(child_idx, skipped);
             }
         }

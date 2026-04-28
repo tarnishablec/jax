@@ -1,0 +1,14 @@
+[package]
+name = "jax-wasm-guest"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "jax_wasm_guest"
+crate-type = ["rlib"]
+
+[dependencies]
+jax-wasm-abi.workspace = true
+
+[lints]
+workspace = true

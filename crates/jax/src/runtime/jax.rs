@@ -2,7 +2,7 @@ use crate::config::JaxConfig;
 use crate::probe::Probe;
 use crate::registry::{RegistryHandle, ShardRegistry};
 use crate::report::StoredStartupReport;
-use crate::shard::Shard;
+use crate::shard::{Shard, TypedShard};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 /// Core application context.
 ///
-/// Lifecycle: `default/with_config()` → `probe()` → `register()` → `build()` → `Arc::new()` → `start()`.
+/// Lifecycle: `default/with_config()` -> `probe()` -> `register()` -> `build()` -> `Arc::new()` -> `start()`.
 pub struct Jax {
     pub(crate) registry: RegistryHandle,
     pub(crate) startup_report: AtomicPtr<StoredStartupReport>,
@@ -54,8 +54,8 @@ impl Jax {
         self
     }
 
-    /// Register a shard. Must be called before `start()`.
-    pub fn register<T: Shard>(mut self, shard: Arc<T>) -> Self {
+    /// Register a typed shard. Must be called before `start()`.
+    pub fn register<T: TypedShard>(mut self, shard: Arc<T>) -> Self {
         self.pending.push(shard);
         self
     }
@@ -67,7 +67,7 @@ impl Jax {
         }
 
         let (mut graph, mut indices) = if let Some(snapshot) = self.registry.snapshot() {
-            (snapshot.graph.clone(), snapshot.native_indices.clone())
+            (snapshot.graph.clone(), snapshot.indices.clone())
         } else {
             (StableDiGraph::new(), BTreeMap::new())
         };
@@ -76,7 +76,7 @@ impl Jax {
         let mut new_node_indices = Vec::with_capacity(new_shards.len());
 
         for shard in new_shards {
-            let shard_id = shard.id();
+            let shard_id = shard.descriptor().id();
 
             if indices.contains_key(&shard_id) {
                 return Err(
@@ -90,19 +90,21 @@ impl Jax {
         }
 
         for &consumer_idx in &new_node_indices {
-            let dep_ids = {
+            let dependencies = {
                 let shard = &graph[consumer_idx];
-                shard.dependencies()
+                shard.descriptor().dependencies().to_vec()
             };
 
-            for dep_id in dep_ids {
+            for dependency in dependencies {
+                let dep_id = dependency.id();
                 if let Some(&provider_idx) = indices.get(&dep_id) {
                     graph.add_edge(provider_idx, consumer_idx, ());
                 } else {
+                    let consumer_id = graph[consumer_idx].descriptor().id();
                     return Err(alloc::format!(
                         "Jax: Missing dependency [{}] for new shard [{}]",
                         dep_id,
-                        graph[consumer_idx].id()
+                        consumer_id
                     )
                     .into());
                 }
@@ -113,19 +115,17 @@ impl Jax {
             return Err("Jax: Incremental build failed due to circular dependency".into());
         }
 
-        self.registry.swap(Arc::new(ShardRegistry {
-            graph,
-            native_indices: indices,
-            guest_indices: Default::default(),
-        }));
+        self.registry
+            .swap(Arc::new(ShardRegistry { graph, indices }));
 
         Ok(self)
     }
 
-    /// Retrieve a native shard by its concrete type.
+    /// Retrieve a typed shard by its concrete Rust type.
     ///
-    /// Panics if `T` was never registered.
-    pub fn get_shard<T: Shard>(&self) -> Arc<T> {
+    /// Panics if `T` was never registered or the registered shard has a
+    /// mismatched concrete type for `T::static_id()`.
+    pub fn get_shard<T: TypedShard>(&self) -> Arc<T> {
         let snapshot = self
             .registry
             .snapshot()
@@ -133,7 +133,7 @@ impl Jax {
 
         let shard_uuid = T::static_id();
 
-        let node_idx = snapshot.native_indices.get(&shard_uuid).unwrap_or_else(|| {
+        let node_idx = snapshot.indices.get(&shard_uuid).unwrap_or_else(|| {
             panic!(
                 "Jax: Shard [{}] with ID [{}] not found. Was it registered?",
                 type_name::<T>(),
@@ -158,13 +158,17 @@ impl Jax {
             return Vec::new();
         };
         snapshot
-            .native_indices
+            .indices
             .keys()
             .map(|&id| {
-                let idx = snapshot.native_indices[&id];
-                let shard = &snapshot.graph[idx];
-                let label = shard.label();
-                let deps = shard.dependencies();
+                let idx = snapshot.indices[&id];
+                let descriptor = snapshot.graph[idx].descriptor();
+                let label = descriptor.label().into();
+                let deps = descriptor
+                    .dependencies()
+                    .iter()
+                    .map(|dependency| dependency.id())
+                    .collect();
                 (id, label, deps)
             })
             .collect()

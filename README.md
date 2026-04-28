@@ -13,7 +13,7 @@ Jax is a lightweight, dependency-aware plugin system for Rust applications. It a
 - Dynamic topological execution using atomic in-degree tracking
 - Automatic skipping of downstream shards on startup failure
 - Graceful shutdown in reverse topological order (best-effort policy)
-- Type-safe retrieval of native shards via `get_shard<T>()`
+- Type-safe retrieval of typed Rust shards via `get_shard<T>()`
 - no_std compatible (with alloc)
 
 ## Installation
@@ -23,12 +23,14 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 jax = { git = "https://github.com/tarnishablec/jax.git", branch = "main" }  # or use a published version when available
+async-trait = "0.1"
+uuid = "1"
 ```
 
 ## Quick Start
 ```rust
-use jax::{depends, shard_id, Jax, Shard};
-use core::sync::Arc;
+use jax::{depends, shard_id, Jax, JaxResult, Shard, ShardDescriptor, TypedShard};
+use std::sync::Arc;
 
 // Define your shard
 struct DatabaseShard {
@@ -41,15 +43,22 @@ impl DatabaseShard {
     }
 }
 
-impl Shard for DatabaseShard {
+impl TypedShard for DatabaseShard {
     shard_id!("550e8400-e29b-41d4-a716-446655440000");
+}
 
-    async fn setup(&self, jax: Arc<Jax>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+#[async_trait::async_trait]
+impl Shard for DatabaseShard {
+    fn descriptor(&self) -> ShardDescriptor {
+        ShardDescriptor::typed::<Self>()
+    }
+
+    async fn setup(&self, jax: Arc<Jax>) -> JaxResult<()> {
         // Initialize database connection, etc.
         Ok(())
     }
 
-    async fn teardown(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn teardown(&self, _jax: Arc<Jax>) -> JaxResult<()> {
         // Close connection
         Ok(())
     }
@@ -63,14 +72,17 @@ impl AuthShard {
     }
 }
 
-impl Shard for AuthShard {
+impl TypedShard for AuthShard {
     shard_id!("67e55044-10b1-426f-9247-bb680e5fe0c8");
+}
 
-    fn dependencies(&self) -> Vec<Uuid> {
-        depends![DatabaseShard]
+#[async_trait::async_trait]
+impl Shard for AuthShard {
+    fn descriptor(&self) -> ShardDescriptor {
+        ShardDescriptor::typed::<Self>().with_dependencies(depends![DatabaseShard])
     }
 
-    async fn setup(&self, jax: Arc<Jax>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn setup(&self, jax: Arc<Jax>) -> JaxResult<()> {
         let db = jax.get_shard::<DatabaseShard>();
         // Use db to load auth data
         Ok(())

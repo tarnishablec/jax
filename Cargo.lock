@@ -203,6 +203,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "jax-wasm-abi"
+version = "0.2.0"
+dependencies = [
+ "uuid",
+]
+
+[[package]]
+name = "jax-wasm-guest"
+version = "0.2.0"
+dependencies = [
+ "jax-wasm-abi",
+]
+
+[[package]]
+name = "jax-wasm-host"
+version = "0.2.0"
+dependencies = [
+ "jax",
+ "jax-wasm-abi",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.94"
 source = "registry+https://github.com/rust-lang/crates.io-index"

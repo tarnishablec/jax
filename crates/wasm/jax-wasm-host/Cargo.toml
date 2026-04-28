@@ -1,0 +1,15 @@
+[package]
+name = "jax-wasm-host"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "jax_wasm_host"
+crate-type = ["rlib"]
+
+[dependencies]
+jax.workspace = true
+jax-wasm-abi.workspace = true
+
+[lints]
+workspace = true
