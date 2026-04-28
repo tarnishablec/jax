@@ -6,8 +6,6 @@ version = "0.1.0"
 [dependencies]
 example-wasm-typed-shard = { path = "../typed-shard" }
 jax.workspace = true
-jax-wasm-host.workspace = true
+jax-wasm = { workspace = true, features = ["host"] }
 jsonschema.workspace = true
-serde_json.workspace = true
 tokio.workspace = true
-tracing.workspace = true

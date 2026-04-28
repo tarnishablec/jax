@@ -2,11 +2,9 @@
 
 use example_wasm_typed_shard::LogShard;
 use jax::Jax;
-use jax_wasm_host::{WasmHostExports, WasmShardLoader};
-use serde_json::json;
+use jax_wasm::prelude::*;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::Level;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

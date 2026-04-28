@@ -8,8 +8,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 example-wasm-typed-shard = { path = "../typed-shard" }
-jax-wasm.workspace = true
-jax-wasm-guest.workspace = true
+jax-wasm = { workspace = true, features = ["guest"] }
 schemars.workspace = true
 serde.workspace = true
-tracing.workspace = true

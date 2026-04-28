@@ -1,12 +1,8 @@
 //! Example guest shard implemented as a WebAssembly component.
 
-use jax_wasm_guest::export_shard;
-use jax_wasm_guest::wasm::{Descriptor, Jax, WasmShard};
-use schemars::JsonSchema;
-use serde::Deserialize;
-use tracing::Level;
+use jax_wasm::prelude::*;
 
-jax_wasm::import!(example_wasm_typed_shard::LogShard);
+import!(example_wasm_typed_shard::LogShard);
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -48,4 +44,4 @@ impl WasmShard for ExampleGuestShard {
     }
 }
 
-export_shard!(ExampleGuestShard);
+wasm_shard!(ExampleGuestShard);

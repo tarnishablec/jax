@@ -10,7 +10,7 @@ crate-type = ["rlib"]
 [dependencies]
 async-trait.workspace = true
 jax.workspace = true
-jax-wasm.workspace = true
+jax-wasm-contract.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 wasmtime.workspace = true

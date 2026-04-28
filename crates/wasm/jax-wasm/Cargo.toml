@@ -8,9 +8,19 @@ name = "jax_wasm"
 crate-type = ["rlib"]
 
 [dependencies]
+jax-wasm-contract.workspace = true
+jax-wasm-guest = { workspace = true, optional = true }
+jax-wasm-host = { workspace = true, optional = true }
 jax-wasm-macros.workspace = true
+schemars.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+
+[features]
+default = []
+guest = ["dep:jax-wasm-guest"]
+host = ["dep:jax-wasm-host"]
 
 [lints]
 workspace = true

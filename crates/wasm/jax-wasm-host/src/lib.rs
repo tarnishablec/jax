@@ -5,7 +5,7 @@ use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::error::Error;
 use jax_core::{Dependency, Descriptor, Jax, JaxResult, Shard, ShardId};
-use jax_wasm::WasmExport;
+use jax_wasm_contract::WasmExport;
 use serde::Serialize;
 use std::path::Path;
 use std::sync::Mutex;
@@ -16,7 +16,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 mod jax_wit {
     wasmtime::component::bindgen!({
         world: "jax-shard",
-        path: "../jax-wasm-abi/wit",
+        path: "../jax-wasm-contract/wit",
     });
 
     pub mod runtime {

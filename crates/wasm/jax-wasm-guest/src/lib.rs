@@ -7,17 +7,17 @@ use core::error::Error;
 use schemars::{JsonSchema, schema_for};
 use serde::de::DeserializeOwned;
 
-pub use jax_wasm_abi::{
+pub use jax_wasm_contract::{
     ABI_NAME, ABI_VERSION, FilesystemPermission, MANIFEST_CUSTOM_SECTION, PermissionManifest,
     ShardManifest, ShardManifestDependency,
 };
 
 wit_bindgen::generate!({
     world: "jax-shard",
-    path: "../jax-wasm-abi/wit",
+    path: "../jax-wasm-contract/wit",
     export_macro_name: "__export_shard",
     pub_export_macro: true,
-    default_bindings_module: "jax_wasm_guest",
+    default_bindings_module: "jax_wasm::guest",
 });
 
 pub mod jax_wit {
@@ -116,7 +116,7 @@ impl<T: WasmShard> crate::jax_wit::shard::Guest for T {
 }
 
 #[macro_export]
-macro_rules! export_shard {
+macro_rules! wasm_shard {
     ($ty:ident) => {
         $crate::__export_shard!($ty);
     };

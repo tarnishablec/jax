@@ -3,7 +3,7 @@ resolver = "3"
 members = [
     "crates/jax",
     "crates/jax-probes",
-    "crates/wasm/jax-wasm-abi",
+    "crates/wasm/jax-wasm-contract",
     "crates/wasm/jax-wasm",
     "crates/wasm/jax-wasm-guest",
     "crates/wasm/jax-wasm-host",
@@ -19,7 +19,7 @@ version = "0.2.0"
 
 [workspace.dependencies]
 jax = { path = "crates/jax" }
-jax-wasm-abi = { path = "crates/wasm/jax-wasm-abi" }
+jax-wasm-contract = { path = "crates/wasm/jax-wasm-contract" }
 jax-wasm = { path = "crates/wasm/jax-wasm" }
 jax-wasm-guest = { path = "crates/wasm/jax-wasm-guest" }
 jax-wasm-host = { path = "crates/wasm/jax-wasm-host" }

@@ -36,7 +36,7 @@ pub fn export(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
 
-        impl ::jax_wasm::WasmExport for #type_ident {
+        impl ::jax_wasm::contract::WasmExport for #type_ident {
             fn shard_id(&self) -> ::std::string::String {
                 #module_ident::shard_id()
             }
@@ -61,11 +61,11 @@ pub fn export(_attr: TokenStream, item: TokenStream) -> TokenStream {
         macro_rules! #import_macro_ident {
             () => {
                 pub struct #type_ident<'a> {
-                    jax: &'a ::jax_wasm_guest::Jax,
+                    jax: &'a ::jax_wasm::guest::Jax,
                 }
 
-                impl<'a> ::jax_wasm_guest::WasmShardClient<'a> for #type_ident<'a> {
-                    fn from_jax(jax: &'a ::jax_wasm_guest::Jax) -> Self {
+                impl<'a> ::jax_wasm::guest::WasmShardClient<'a> for #type_ident<'a> {
+                    fn from_jax(jax: &'a ::jax_wasm::guest::Jax) -> Self {
                         Self { jax }
                     }
                 }
@@ -161,7 +161,7 @@ fn dispatch_arm(method: &ExportedMethod) -> proc_macro2::TokenStream {
         let ident = &arg.ident;
         let ty = &arg.ty;
         quote! {
-            let #ident: #ty = <#ty as ::jax_wasm::FromWireValue>::from_wire_value(
+            let #ident: #ty = <#ty as ::jax_wasm::contract::FromWireValue>::from_wire_value(
                 __args
                     .get(#index)
                     .cloned()
@@ -177,7 +177,7 @@ fn dispatch_arm(method: &ExportedMethod) -> proc_macro2::TokenStream {
 
     quote! {
         #method_name => {
-            let __args = ::jax_wasm::decode_request(request_json)?;
+            let __args = ::jax_wasm::contract::decode_request(request_json)?;
             if __args.len() != #arg_count {
                 return Err(::std::format!(
                     "Jax WASM: method [{}] expected [{}] args, got [{}]",
@@ -187,7 +187,7 @@ fn dispatch_arm(method: &ExportedMethod) -> proc_macro2::TokenStream {
                 ));
             }
             #(#arg_bindings)*
-            ::jax_wasm::IntoWireResult::into_wire_result(self.#method_ident(#(#arg_idents),*))
+            ::jax_wasm::contract::IntoWireResult::into_wire_result(self.#method_ident(#(#arg_idents),*))
         }
     }
 }
@@ -203,7 +203,7 @@ fn client_method(method: &ExportedMethod, module_ident: &syn::Ident) -> proc_mac
     });
     let wire_values = method.args.iter().map(|arg| {
         let ident = &arg.ident;
-        quote! { ::jax_wasm::ToWireValue::to_wire_value(&#ident)? }
+        quote! { ::jax_wasm::contract::ToWireValue::to_wire_value(&#ident)? }
     });
 
     quote! {
@@ -211,13 +211,13 @@ fn client_method(method: &ExportedMethod, module_ident: &syn::Ident) -> proc_mac
             &self,
             #(#args),*
         ) -> ::core::result::Result<#response_ty, ::std::string::String> {
-            let request_json = ::jax_wasm::encode_request(::std::vec![#(#wire_values),*])?;
+            let request_json = ::jax_wasm::contract::encode_request(::std::vec![#(#wire_values),*])?;
             let response_json = self.jax.call_raw(
                 &$crate::#module_ident::shard_id(),
                 #method_name,
                 &request_json,
             )?;
-            ::jax_wasm::decode_response::<#response_ty>(&response_json)
+            ::jax_wasm::contract::decode_response::<#response_ty>(&response_json)
         }
     }
 }
