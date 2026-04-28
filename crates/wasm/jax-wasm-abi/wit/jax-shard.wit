@@ -1,9 +1,5 @@
 package jax:wasm@0.1.0;
 
-interface host {
-  log: func(level: string, message: string);
-}
-
 interface shard {
   record dependency {
     id: string,
@@ -23,6 +19,5 @@ interface shard {
 }
 
 world jax-shard {
-  import host;
   export shard;
 }

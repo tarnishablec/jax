@@ -1,7 +1,7 @@
 //! Example guest shard implemented as a WebAssembly component.
 
 use jax_wasm_guest::export_shard;
-use jax_wasm_guest::wasm::{self, Descriptor, WasmShard};
+use jax_wasm_guest::wasm::{Descriptor, Jax, WasmShard};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -27,22 +27,16 @@ impl WasmShard for ExampleGuestShard {
     }
 
     fn configure(config: Self::Config) -> Result<(), String> {
-        if config.verbose {
-            wasm::host::log(
-                "info",
-                &format!("example WASM shard configured: {}", config.greeting),
-            );
-        }
+        let _ = config.greeting;
+        let _ = config.verbose;
         Ok(())
     }
 
-    fn setup() -> Result<(), String> {
-        wasm::host::log("info", "example WASM shard setup");
+    fn setup(_jax: &Jax) -> Result<(), String> {
         Ok(())
     }
 
-    fn teardown() -> Result<(), String> {
-        wasm::host::log("info", "example WASM shard teardown");
+    fn teardown(_jax: &Jax) -> Result<(), String> {
         Ok(())
     }
 }

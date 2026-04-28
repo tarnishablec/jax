@@ -7,7 +7,7 @@ use jax_core::{Dependency, Descriptor, Jax, JaxResult, Shard, ShardId};
 use serde::Serialize;
 use std::path::Path;
 use std::sync::Mutex;
-use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
+use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
@@ -51,7 +51,6 @@ impl WasmShardModule {
     pub fn config_schema_json(&self) -> JaxResult<String> {
         let mut linker = Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-        JaxShard::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |state| state)?;
 
         let mut store = Store::new(&self.engine, HostState::new());
         let bindings = JaxShard::instantiate(&mut store, &self.component, &linker)?;
@@ -77,7 +76,6 @@ impl WasmShardModule {
     pub fn instantiate_with_json(&self, config: impl Into<String>) -> JaxResult<Arc<dyn Shard>> {
         let mut linker = Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-        JaxShard::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |state| state)?;
 
         let mut store = Store::new(&self.engine, HostState::new());
         let bindings = JaxShard::instantiate(&mut store, &self.component, &linker)?;
@@ -160,12 +158,6 @@ impl WasiView for HostState {
             ctx: &mut self.wasi,
             table: &mut self.table,
         }
-    }
-}
-
-impl jax::wasm::host::Host for HostState {
-    fn log(&mut self, level: String, message: String) {
-        println!("[wasm:{level}] {message}");
     }
 }
 

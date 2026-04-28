@@ -21,16 +21,25 @@ wit_bindgen::generate!({
 });
 
 pub mod wasm {
-    pub mod host {
-        pub use crate::jax::wasm::host::log;
-    }
-
+    pub use crate::Jax;
     pub use crate::WasmShard;
     pub use crate::exports::jax::wasm::shard::{Dependency, Descriptor};
 }
 
 pub type GuestError = Box<dyn Error + Send + Sync>;
 pub type GuestResult<T> = Result<T, GuestError>;
+
+pub struct Jax {
+    _private: (),
+}
+
+static JAX: Jax = Jax { _private: () };
+
+impl Jax {
+    pub fn current() -> &'static Self {
+        &JAX
+    }
+}
 
 pub trait WasmShard {
     type Config: DeserializeOwned + JsonSchema;
@@ -41,11 +50,11 @@ pub trait WasmShard {
         Ok(())
     }
 
-    fn setup() -> Result<(), String> {
+    fn setup(_jax: &Jax) -> Result<(), String> {
         Ok(())
     }
 
-    fn teardown() -> Result<(), String> {
+    fn teardown(_jax: &Jax) -> Result<(), String> {
         Ok(())
     }
 }
@@ -66,11 +75,11 @@ impl<T: WasmShard> exports::jax::wasm::shard::Guest for T {
     }
 
     fn setup() -> Result<(), String> {
-        T::setup()
+        T::setup(Jax::current())
     }
 
     fn teardown() -> Result<(), String> {
-        T::teardown()
+        T::teardown(Jax::current())
     }
 }
 

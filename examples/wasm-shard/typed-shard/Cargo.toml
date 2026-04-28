@@ -1,0 +1,13 @@
+[package]
+name = "example-wasm-typed-shard"
+edition = "2024"
+version = "0.1.0"
+
+[dependencies]
+async-trait.workspace = true
+jax.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
