@@ -1,37 +1,51 @@
-use crate::report::{ShardError, StartupReport, StoredStartupReport};
+use crate::registry::ShardLifecycleState;
+use crate::report::{ShardError, StartupReport};
 use crate::runtime::Jax;
 use crate::shard::Shard;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use core::error::Error;
-use core::sync::atomic::Ordering;
 use futures::stream::{FuturesUnordered, StreamExt};
+use petgraph::prelude::NodeIndex;
 
 use super::scheduler::ShardScheduler;
 
 impl Jax {
     /// Starts all registered shards in dependency-aware topological order with bounded concurrency.
     pub async fn start(self: &Arc<Self>) -> Result<StartupReport, Box<dyn Error + Send + Sync>> {
-        let snapshot = self.registry.snapshot().ok_or("Jax: Registry null")?;
+        let snapshot = {
+            let _mutation = self.registry.lock_mutation().await;
+            self.begin_start()?;
+            match self.registry.snapshot() {
+                Some(snapshot) => snapshot,
+                None => {
+                    self.finish_start(false);
+                    return Err("Jax: Registry null".into());
+                }
+            }
+        };
 
         let scheduler = Arc::new(ShardScheduler::new(&snapshot.graph));
         let mut tasks = FuturesUnordered::new();
         let mut report = StartupReport::default();
 
         let mut ready_queue = VecDeque::new();
-        let max_concurrency = self.config.max_concurrency;
+        let max_concurrency = self.config.max_concurrency.max(1);
 
-        let make_task = |shard: Arc<dyn Shard>, idx: usize| {
+        let make_task = |shard: Arc<dyn Shard>, idx: NodeIndex| {
             let jax_ptr = Arc::clone(self);
             let scheduler_ptr = Arc::clone(&scheduler);
+            let registry = Arc::clone(&snapshot);
             let shard_id = shard.descriptor().id();
             let probes = &self.config.probes;
             async move {
                 scheduler_ptr.mark_running(idx);
+                registry.set_state(shard_id, ShardLifecycleState::Starting);
 
                 for probe in probes {
                     if let Err(e) = probe.before_setup(shard.as_ref()).await {
+                        registry.set_state(shard_id, ShardLifecycleState::Failed);
                         return Err((shard_id, idx, e));
                     }
                 }
@@ -43,8 +57,14 @@ impl Jax {
                 }
 
                 match result {
-                    Ok(_) => Ok((shard_id, idx)),
-                    Err(e) => Err((shard_id, idx, e)),
+                    Ok(_) => {
+                        registry.set_state(shard_id, ShardLifecycleState::Started);
+                        Ok((shard_id, idx))
+                    }
+                    Err(e) => {
+                        registry.set_state(shard_id, ShardLifecycleState::Failed);
+                        Err((shard_id, idx, e))
+                    }
                 }
             }
         };
@@ -74,6 +94,9 @@ impl Jax {
                     }
                     Err((id, idx, err)) => {
                         let skipped_ids = scheduler.notify_failure(idx);
+                        for skipped_id in &skipped_ids {
+                            snapshot.set_state(*skipped_id, ShardLifecycleState::Skipped);
+                        }
                         report.skipped.extend(skipped_ids);
                         report.failed.push(ShardError { id, error: err });
                     }
@@ -81,17 +104,7 @@ impl Jax {
             }
         }
 
-        let stored = StoredStartupReport {
-            failed_ids: report.failed.iter().map(|f| f.id).collect(),
-            skipped: report.skipped.clone(),
-        };
-        let stored_ptr = Box::into_raw(Box::new(stored));
-        let old_report = self.startup_report.swap(stored_ptr, Ordering::AcqRel);
-        if !old_report.is_null() {
-            unsafe {
-                drop(Box::from_raw(old_report));
-            }
-        }
+        self.finish_start(report.is_success());
 
         Ok(report)
     }

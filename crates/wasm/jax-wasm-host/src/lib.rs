@@ -4,7 +4,7 @@ extern crate jax as jax_core;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::error::Error;
-use jax_core::report::{StartupReport, StoredStartupReport};
+use jax_core::report::StartupReport;
 use jax_core::{Dependency, Descriptor, Jax, JaxResult, Shard, ShardId};
 use jax_wasm_contract::WasmExport;
 use serde::Serialize;
@@ -144,10 +144,6 @@ impl WasmJax {
 
     pub async fn unmount(&self, shard_id: ShardId) -> JaxResult<()> {
         self.jax.unmount(shard_id).await
-    }
-
-    pub fn get_startup_report(&self) -> Option<&StoredStartupReport> {
-        self.jax.get_startup_report()
     }
 
     pub async fn load_wasm_from_file(&self, path: impl AsRef<Path>) -> JaxResult<WasmShardModule> {

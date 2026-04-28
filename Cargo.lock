@@ -1301,6 +1301,8 @@ dependencies = [
  "downcast-rs",
  "futures",
  "petgraph 0.8.3",
+ "spin",
+ "tokio",
  "uuid",
 ]
 

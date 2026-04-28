@@ -21,11 +21,3 @@ impl StartupReport {
         self.failed.is_empty() && self.skipped.is_empty()
     }
 }
-
-/// A clone-friendly summary of the startup report, stored for later queries.
-/// Unlike `StartupReport`, this does not carry `Box<dyn Error>`.
-#[derive(Default)]
-pub struct StoredStartupReport {
-    pub failed_ids: Vec<ShardId>,
-    pub skipped: Vec<ShardId>,
-}

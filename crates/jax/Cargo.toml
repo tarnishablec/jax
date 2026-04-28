@@ -13,9 +13,13 @@ async-trait.workspace = true
 uuid.workspace = true
 futures.workspace = true
 downcast-rs = { workspace = true, features = ["sync"] }
+spin = { workspace = true, features = ["spin_mutex"] }
 
 [features]
 setup-timing = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true
