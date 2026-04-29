@@ -1,13 +1,13 @@
 use crate::config::JaxConfig;
 use crate::probe::Probe;
 use crate::registry::{RegistryHandle, ShardLifecycleState, ShardRegistry};
-use crate::shard::{Shard, ShardId, TypedShard};
+use crate::shard::{Shard, ShardId};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::any::type_name;
+use core::any::{TypeId, type_name};
 use core::error::Error;
 use petgraph::prelude::*;
 use petgraph::visit::EdgeRef;
@@ -15,6 +15,7 @@ use spin::Mutex;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum JaxLifecycleState {
+    Configuring,
     Built,
     Starting,
     Started,
@@ -37,7 +38,7 @@ impl Default for Jax {
     fn default() -> Self {
         Self {
             registry: RegistryHandle::default(),
-            lifecycle: Mutex::new(JaxLifecycleState::Built),
+            lifecycle: Mutex::new(JaxLifecycleState::Configuring),
             pending: Vec::new(),
             config: JaxConfig::default(),
         }
@@ -49,7 +50,7 @@ impl Jax {
         Self {
             config,
             registry: RegistryHandle::default(),
-            lifecycle: Mutex::new(JaxLifecycleState::Built),
+            lifecycle: Mutex::new(JaxLifecycleState::Configuring),
             pending: Vec::new(),
         }
     }
@@ -71,10 +72,13 @@ impl Jax {
 
     /// Finalizes the registry by building the dependency graph.
     pub fn build(mut self) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        self.begin_build()?;
+
         if self.pending.is_empty() {
             if self.registry.snapshot().is_none() {
                 self.registry.swap(Arc::new(ShardRegistry::empty()));
             }
+            self.finish_build();
             return Ok(self);
         }
 
@@ -84,7 +88,7 @@ impl Jax {
         let mut new_node_indices = Vec::with_capacity(new_shards.len());
 
         for shard in new_shards {
-            let shard_id = shard.descriptor().id();
+            let shard_id = shard.id();
 
             if indices.contains_key(&shard_id) {
                 return Err(
@@ -101,15 +105,14 @@ impl Jax {
         for &consumer_idx in &new_node_indices {
             let dependencies = {
                 let shard = &graph[consumer_idx];
-                shard.descriptor().dependencies().to_vec()
+                shard.dependencies()
             };
 
-            for dependency in dependencies {
-                let dep_id = dependency.id();
+            for dep_id in dependencies {
                 if let Some(&provider_idx) = indices.get(&dep_id) {
                     graph.add_edge(provider_idx, consumer_idx, ());
                 } else {
-                    let consumer_id = graph[consumer_idx].descriptor().id();
+                    let consumer_id = graph[consumer_idx].id();
                     return Err(alloc::format!(
                         "Jax: Missing dependency [{}] for new shard [{}]",
                         dep_id,
@@ -127,36 +130,73 @@ impl Jax {
         self.registry
             .swap(Arc::new(ShardRegistry::new(graph, indices, states)));
 
+        self.finish_build();
+
         Ok(self)
     }
 
-    /// Retrieve a typed shard by its concrete Rust type.
+    /// Retrieve a shard by its concrete Rust type.
     ///
-    /// Panics if `T` was never registered or the registered shard has a
-    /// mismatched concrete type for `T::static_id()`.
-    pub fn get_shard<T: TypedShard>(&self) -> Arc<T> {
-        let snapshot = self
-            .registry
-            .snapshot()
-            .expect("Jax: Registry is null. Did you call build()?");
+    /// Panics if no registered shard has type `T`, or if more than one shard
+    /// has type `T`. Use `get_shard_by_id<T>()` when multiple instances of the
+    /// same Rust type are registered.
+    pub fn get_shard<T: Shard>(&self) -> Arc<T> {
+        let snapshot = match self.registry.snapshot() {
+            Some(snapshot) => snapshot,
+            None => panic!("Jax: Registry is null. Did you call build()?"),
+        };
 
-        let shard_uuid = T::static_id();
+        let matches = snapshot
+            .type_index
+            .get(&TypeId::of::<T>())
+            .cloned()
+            .unwrap_or_default();
 
-        let node_idx = snapshot.indices.get(&shard_uuid).unwrap_or_else(|| {
+        match matches.len() {
+            1 => self.get_shard_by_id(matches[0]),
+            0 => panic!(
+                "Jax: Shard type [{}] not found. Was it registered?",
+                type_name::<T>()
+            ),
+            _ => {
+                let ids = matches
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                panic!(
+                    "Jax: Shard type [{}] matched multiple registered shards: [{}]. Use get_shard_by_id()",
+                    type_name::<T>(),
+                    ids
+                )
+            }
+        }
+    }
+
+    /// Retrieve a shard by stable runtime ID and concrete Rust type.
+    ///
+    /// Panics if the ID is not registered or if the registered shard has a
+    /// different concrete type.
+    pub fn get_shard_by_id<T: Shard>(&self, shard_id: ShardId) -> Arc<T> {
+        let snapshot = match self.registry.snapshot() {
+            Some(snapshot) => snapshot,
+            None => panic!("Jax: Registry is null. Did you call build()?"),
+        };
+
+        let node_idx = snapshot.indices.get(&shard_id).unwrap_or_else(|| {
             panic!(
                 "Jax: Shard [{}] with ID [{}] not found. Was it registered?",
                 type_name::<T>(),
-                shard_uuid
+                shard_id
             )
         });
 
         let shard = snapshot.graph[*node_idx].clone();
-
         shard.downcast_arc::<T>().unwrap_or_else(|_| {
             panic!(
                 "Jax: Shard type [{}] mismatch for ID [{}]",
                 type_name::<T>(),
-                shard_uuid
+                shard_id
             )
         })
     }
@@ -171,13 +211,9 @@ impl Jax {
             .keys()
             .map(|&id| {
                 let idx = snapshot.indices[&id];
-                let descriptor = snapshot.graph[idx].descriptor();
-                let label = descriptor.label().into();
-                let deps = descriptor
-                    .dependencies()
-                    .iter()
-                    .map(|dependency| dependency.id())
-                    .collect();
+                let shard = &snapshot.graph[idx];
+                let label = shard.label().into();
+                let deps = shard.dependencies();
                 (id, label, deps)
             })
             .collect()
@@ -188,7 +224,7 @@ impl Jax {
         self: &Arc<Self>,
         shard: Arc<dyn Shard>,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let shard_id = shard.descriptor().id();
+        let shard_id = shard.id();
         self.reserve_mount(Arc::clone(&shard)).await?;
 
         for probe in &self.config.probes {
@@ -253,7 +289,7 @@ impl Jax {
         let _mutation = self.registry.lock_mutation().await;
         self.ensure_started("mount")?;
 
-        let shard_id = shard.descriptor().id();
+        let shard_id = shard.id();
         let (mut graph, mut indices, mut states) = self.registry_parts();
 
         if indices.contains_key(&shard_id) {
@@ -262,12 +298,11 @@ impl Jax {
             );
         }
 
-        let dependencies = shard.descriptor().dependencies().to_vec();
+        let dependencies = shard.dependencies();
         let shard_idx = graph.add_node(Arc::clone(&shard));
         indices.insert(shard_id, shard_idx);
 
-        for dependency in dependencies {
-            let dep_id = dependency.id();
+        for dep_id in dependencies {
             if let Some(&provider_idx) = indices.get(&dep_id) {
                 if states.get(&dep_id) != Some(&ShardLifecycleState::Started) {
                     return Err(alloc::format!(
@@ -362,7 +397,7 @@ impl Jax {
         let dependents: Vec<ShardId> = snapshot
             .graph
             .edges_directed(shard_idx, Outgoing)
-            .map(|edge| snapshot.graph[edge.target()].descriptor().id())
+            .map(|edge| snapshot.graph[edge.target()].id())
             .collect();
         if !dependents.is_empty() {
             return Err(alloc::format!(
@@ -419,6 +454,9 @@ impl Jax {
     pub(crate) fn begin_start(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let mut state = self.lifecycle.lock();
         match *state {
+            JaxLifecycleState::Configuring => {
+                Err("Jax: runtime is not built. Call build() before start()".into())
+            }
             JaxLifecycleState::Built | JaxLifecycleState::Stopped => {
                 *state = JaxLifecycleState::Starting;
                 Ok(())
@@ -448,7 +486,9 @@ impl Jax {
                 *state = JaxLifecycleState::Stopping;
                 Ok(true)
             }
-            JaxLifecycleState::Built | JaxLifecycleState::Stopped => Ok(false),
+            JaxLifecycleState::Configuring
+            | JaxLifecycleState::Built
+            | JaxLifecycleState::Stopped => Ok(false),
             JaxLifecycleState::Starting => Err("Jax: runtime is starting".into()),
             JaxLifecycleState::Stopping => Err("Jax: runtime is already stopping".into()),
         }
@@ -488,6 +528,28 @@ impl Jax {
             (StableDiGraph::new(), BTreeMap::new(), BTreeMap::new())
         }
     }
+
+    fn begin_build(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let state = *self.lifecycle.lock();
+        match state {
+            JaxLifecycleState::Configuring | JaxLifecycleState::Built => Ok(()),
+            JaxLifecycleState::Starting => {
+                Err("Jax: cannot build while runtime is starting".into())
+            }
+            JaxLifecycleState::Started => Err("Jax: cannot build while runtime is started".into()),
+            JaxLifecycleState::StartFailed => {
+                Err("Jax: cannot build after a failed start; call stop() before rebuilding".into())
+            }
+            JaxLifecycleState::Stopping => {
+                Err("Jax: cannot build while runtime is stopping".into())
+            }
+            JaxLifecycleState::Stopped => Err("Jax: cannot build after runtime has stopped".into()),
+        }
+    }
+
+    fn finish_build(&self) {
+        *self.lifecycle.lock() = JaxLifecycleState::Built;
+    }
 }
 
 #[cfg(test)]
@@ -495,7 +557,7 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use crate::{Descriptor, JaxResult, TypedShard, depends, shard_id};
+    use crate::{JaxResult, depends, shard_id};
     use alloc::string::ToString;
     use alloc::vec;
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -515,20 +577,16 @@ mod tests {
     static SELF_VISIBLE_SETUPS: AtomicUsize = AtomicUsize::new(0);
     static REENTRANT_OUTER_SETUPS: AtomicUsize = AtomicUsize::new(0);
     static REENTRANT_INNER_SETUPS: AtomicUsize = AtomicUsize::new(0);
+    static TYPE_INDEX_SETUPS: AtomicUsize = AtomicUsize::new(0);
+    static DEFAULT_LABEL_SETUPS: AtomicUsize = AtomicUsize::new(0);
 
     macro_rules! counted_yield_setup_shard {
         ($ty:ident, $uuid:literal, $counter:ident) => {
             struct $ty;
 
-            impl TypedShard for $ty {
-                shard_id!($uuid);
-            }
-
             #[async_trait::async_trait]
             impl Shard for $ty {
-                fn descriptor(&self) -> Descriptor {
-                    Descriptor::typed::<Self>()
-                }
+                shard_id!($uuid);
 
                 async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
                     $counter.fetch_add(1, Ordering::Relaxed);
@@ -541,15 +599,9 @@ mod tests {
 
     struct RemovedShard;
 
-    impl TypedShard for RemovedShard {
-        shard_id!("00000000-0000-0000-0000-000000000101");
-    }
-
     #[async_trait::async_trait]
     impl Shard for RemovedShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>()
-        }
+        shard_id!("00000000-0000-0000-0000-000000000101");
 
         async fn teardown(&self, _jax: Arc<Jax>) -> JaxResult<()> {
             REMOVED_TEARDOWNS.fetch_add(1, Ordering::Relaxed);
@@ -559,15 +611,9 @@ mod tests {
 
     struct RemainingShard;
 
-    impl TypedShard for RemainingShard {
-        shard_id!("00000000-0000-0000-0000-000000000102");
-    }
-
     #[async_trait::async_trait]
     impl Shard for RemainingShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>()
-        }
+        shard_id!("00000000-0000-0000-0000-000000000102");
 
         async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
             REMAINING_SETUPS.fetch_add(1, Ordering::Relaxed);
@@ -593,15 +639,9 @@ mod tests {
 
     struct FailStartShard;
 
-    impl TypedShard for FailStartShard {
-        shard_id!("00000000-0000-0000-0000-000000000301");
-    }
-
     #[async_trait::async_trait]
     impl Shard for FailStartShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>()
-        }
+        shard_id!("00000000-0000-0000-0000-000000000301");
 
         async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
             Err("intentional setup failure".into())
@@ -610,15 +650,9 @@ mod tests {
 
     struct StopOnceShard;
 
-    impl TypedShard for StopOnceShard {
-        shard_id!("00000000-0000-0000-0000-000000000302");
-    }
-
     #[async_trait::async_trait]
     impl Shard for StopOnceShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>()
-        }
+        shard_id!("00000000-0000-0000-0000-000000000302");
 
         async fn teardown(&self, _jax: Arc<Jax>) -> JaxResult<()> {
             STOP_ONCE_TEARDOWNS.fetch_add(1, Ordering::Relaxed);
@@ -628,15 +662,9 @@ mod tests {
 
     struct PartialStartedShard;
 
-    impl TypedShard for PartialStartedShard {
-        shard_id!("00000000-0000-0000-0000-000000000303");
-    }
-
     #[async_trait::async_trait]
     impl Shard for PartialStartedShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>()
-        }
+        shard_id!("00000000-0000-0000-0000-000000000303");
 
         async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
             PARTIAL_STARTED_SETUPS.fetch_add(1, Ordering::Relaxed);
@@ -651,15 +679,11 @@ mod tests {
 
     struct SkippedAfterFailShard;
 
-    impl TypedShard for SkippedAfterFailShard {
-        shard_id!("00000000-0000-0000-0000-000000000304");
-    }
-
     #[async_trait::async_trait]
     impl Shard for SkippedAfterFailShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>().with_dependencies(depends![FailStartShard])
-        }
+        shard_id!("00000000-0000-0000-0000-000000000304");
+
+        depends![FailStartShard];
 
         async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
             SKIPPED_SETUPS.fetch_add(1, Ordering::Relaxed);
@@ -674,15 +698,9 @@ mod tests {
 
     struct ZeroConcurrencyShard;
 
-    impl TypedShard for ZeroConcurrencyShard {
-        shard_id!("00000000-0000-0000-0000-000000000305");
-    }
-
     #[async_trait::async_trait]
     impl Shard for ZeroConcurrencyShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>()
-        }
+        shard_id!("00000000-0000-0000-0000-000000000305");
 
         async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
             ZERO_CONCURRENCY_SETUPS.fetch_add(1, Ordering::Relaxed);
@@ -697,15 +715,9 @@ mod tests {
 
     struct SelfVisibleMountShard;
 
-    impl TypedShard for SelfVisibleMountShard {
-        shard_id!("00000000-0000-0000-0000-000000000306");
-    }
-
     #[async_trait::async_trait]
     impl Shard for SelfVisibleMountShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>()
-        }
+        shard_id!("00000000-0000-0000-0000-000000000306");
 
         async fn setup(&self, jax: Arc<Jax>) -> JaxResult<()> {
             let _self_shard = jax.get_shard::<SelfVisibleMountShard>();
@@ -716,15 +728,9 @@ mod tests {
 
     struct ReentrantOuterShard;
 
-    impl TypedShard for ReentrantOuterShard {
-        shard_id!("00000000-0000-0000-0000-000000000307");
-    }
-
     #[async_trait::async_trait]
     impl Shard for ReentrantOuterShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>()
-        }
+        shard_id!("00000000-0000-0000-0000-000000000307");
 
         async fn setup(&self, jax: Arc<Jax>) -> JaxResult<()> {
             REENTRANT_OUTER_SETUPS.fetch_add(1, Ordering::Relaxed);
@@ -734,20 +740,58 @@ mod tests {
 
     struct ReentrantInnerShard;
 
-    impl TypedShard for ReentrantInnerShard {
-        shard_id!("00000000-0000-0000-0000-000000000308");
-    }
-
     #[async_trait::async_trait]
     impl Shard for ReentrantInnerShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>()
-        }
+        shard_id!("00000000-0000-0000-0000-000000000308");
 
         async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
             REENTRANT_INNER_SETUPS.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
+    }
+
+    struct TypeIndexedShard(ShardId);
+
+    #[async_trait::async_trait]
+    impl Shard for TypeIndexedShard {
+        fn id(&self) -> ShardId {
+            self.0
+        }
+
+        async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
+            TYPE_INDEX_SETUPS.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    struct DefaultLabelShard;
+
+    #[async_trait::async_trait]
+    impl Shard for DefaultLabelShard {
+        shard_id!("00000000-0000-0000-0000-000000000405");
+
+        async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
+            DEFAULT_LABEL_SETUPS.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    struct MixedDependencyShard;
+
+    #[async_trait::async_trait]
+    impl Shard for MixedDependencyShard {
+        shard_id!("00000000-0000-0000-0000-000000000406");
+
+        depends![
+            FailStartShard,
+            "00000000-0000-0000-0000-000000000405".into(),
+        ];
+    }
+
+    fn test_id(input: &'static str) -> ShardId {
+        input
+            .parse()
+            .unwrap_or_else(|error| panic!("invalid test shard id [{input}]: {error}"))
     }
 
     #[tokio::test]
@@ -764,7 +808,8 @@ mod tests {
 
         let report = jax.start().await?;
         assert!(report.is_success());
-        jax.unmount(RemovedShard::static_id()).await?;
+        jax.unmount(test_id("00000000-0000-0000-0000-000000000101"))
+            .await?;
         jax.stop().await?;
 
         let report = jax.start().await?;
@@ -800,8 +845,8 @@ mod tests {
             .map(|(id, _, _)| id)
             .collect::<Vec<_>>();
 
-        assert!(shard_ids.contains(&MountA::static_id()));
-        assert!(shard_ids.contains(&MountB::static_id()));
+        assert!(shard_ids.contains(&test_id("00000000-0000-0000-0000-000000000201")));
+        assert!(shard_ids.contains(&test_id("00000000-0000-0000-0000-000000000202")));
         assert_eq!(MOUNT_A_SETUPS.load(Ordering::Relaxed), 1);
         assert_eq!(MOUNT_B_SETUPS.load(Ordering::Relaxed), 1);
 
@@ -818,6 +863,20 @@ mod tests {
             .expect_err("mount before start should fail");
 
         assert!(error.to_string().contains("cannot mount"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn start_before_build_is_rejected_without_start_failure() -> JaxResult<()> {
+        let jax = Arc::new(Jax::default());
+
+        let error = match jax.start().await {
+            Ok(_) => panic!("start before build should fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("not built"));
+        assert_eq!(*jax.lifecycle.lock(), JaxLifecycleState::Configuring);
         Ok(())
     }
 
@@ -895,9 +954,13 @@ mod tests {
             report
                 .failed
                 .iter()
-                .any(|failed| failed.id == FailStartShard::static_id())
+                .any(|failed| failed.id == test_id("00000000-0000-0000-0000-000000000301"))
         );
-        assert!(report.skipped.contains(&SkippedAfterFailShard::static_id()));
+        assert!(
+            report
+                .skipped
+                .contains(&test_id("00000000-0000-0000-0000-000000000304"))
+        );
 
         jax.stop().await?;
 
@@ -945,7 +1008,7 @@ mod tests {
         assert!(
             jax.list_shards()
                 .into_iter()
-                .any(|(id, _, _)| id == SelfVisibleMountShard::static_id())
+                .any(|(id, _, _)| id == test_id("00000000-0000-0000-0000-000000000306"))
         );
 
         Ok(())
@@ -967,11 +1030,110 @@ mod tests {
             .map(|(id, _, _)| id)
             .collect::<Vec<_>>();
 
-        assert!(shard_ids.contains(&ReentrantOuterShard::static_id()));
-        assert!(shard_ids.contains(&ReentrantInnerShard::static_id()));
+        assert!(shard_ids.contains(&test_id("00000000-0000-0000-0000-000000000307")));
+        assert!(shard_ids.contains(&test_id("00000000-0000-0000-0000-000000000308")));
         assert_eq!(REENTRANT_OUTER_SETUPS.load(Ordering::Relaxed), 1);
         assert_eq!(REENTRANT_INNER_SETUPS.load(Ordering::Relaxed), 1);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_shard_uses_type_index_for_unique_type() -> JaxResult<()> {
+        let shard = Arc::new(TypeIndexedShard(test_id(
+            "00000000-0000-0000-0000-000000000401",
+        )));
+        let jax = Jax::default().register(shard.clone()).build()?;
+
+        let resolved = jax.get_shard::<TypeIndexedShard>();
+
+        assert!(Arc::ptr_eq(&resolved, &shard));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_shard_reports_ambiguous_type_index_matches() -> JaxResult<()> {
+        let jax = Jax::default()
+            .register(Arc::new(TypeIndexedShard(test_id(
+                "00000000-0000-0000-0000-000000000402",
+            ))))
+            .register(Arc::new(TypeIndexedShard(test_id(
+                "00000000-0000-0000-0000-000000000403",
+            ))))
+            .build()?;
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = jax.get_shard::<TypeIndexedShard>();
+        }))
+        .expect_err("ambiguous type lookup should panic");
+        let message = panic_message(panic);
+
+        assert!(message.contains("matched multiple registered shards"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn type_index_updates_after_mount_and_unmount() -> JaxResult<()> {
+        TYPE_INDEX_SETUPS.store(0, Ordering::Relaxed);
+        let shard_id = test_id("00000000-0000-0000-0000-000000000404");
+
+        let jax = Arc::new(Jax::default().build()?);
+        let report = jax.start().await?;
+        assert!(report.is_success());
+
+        jax.mount(Arc::new(TypeIndexedShard(shard_id))).await?;
+        assert_eq!(jax.get_shard::<TypeIndexedShard>().id(), shard_id);
+
+        jax.unmount(shard_id).await?;
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = jax.get_shard::<TypeIndexedShard>();
+        }))
+        .expect_err("unmounted type lookup should panic");
+        let message = panic_message(panic);
+
+        assert!(message.contains("not found"));
+        assert_eq!(TYPE_INDEX_SETUPS.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn default_label_uses_rust_type_name() -> JaxResult<()> {
+        let shard_id = test_id("00000000-0000-0000-0000-000000000405");
+        let jax = Jax::default()
+            .register(Arc::new(DefaultLabelShard))
+            .build()?;
+
+        let label = jax
+            .list_shards()
+            .into_iter()
+            .find(|(id, _, _)| *id == shard_id)
+            .map(|(_, label, _)| label)
+            .expect("default label shard should be listed");
+
+        assert_eq!(label, type_name::<DefaultLabelShard>());
+        Ok(())
+    }
+
+    #[test]
+    fn depends_macro_supports_mixed_types_and_ids() {
+        let dependencies = MixedDependencyShard.dependencies();
+
+        assert_eq!(
+            dependencies,
+            vec![
+                test_id("00000000-0000-0000-0000-000000000301"),
+                test_id("00000000-0000-0000-0000-000000000405"),
+            ]
+        );
+    }
+
+    fn panic_message(panic: Box<dyn core::any::Any + Send>) -> String {
+        if let Some(message) = panic.downcast_ref::<&str>() {
+            (*message).to_string()
+        } else if let Some(message) = panic.downcast_ref::<String>() {
+            message.clone()
+        } else {
+            "<non-string panic>".into()
+        }
     }
 }

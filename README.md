@@ -2,18 +2,22 @@
 
 [![no_std compatible](https://img.shields.io/badge/no__std-compatible-seagreen.svg?style=flat-square)](https://crates.io/crates/jax)
 
-Jax is a lightweight, dependency-aware plugin system for Rust applications. It allows you to register modular components called "shards" that have explicit dependencies and handle their lifecycle (setup and teardown) in the correct topological order with support for bounded concurrency and failure propagation.
+Jax is a lightweight, dependency-aware lifecycle runtime for Rust applications.
+It manages opaque shards with stable IDs, explicit dependencies, and ordered
+setup/teardown. Cross-runtime guest protocols, exports, and invocation routing
+are intentionally outside `jax` core.
 
 ## Features
 
 - Declare shards with stable UUID identifiers and explicit dependencies
 - Automatic dependency graph construction using [petgraph](https://github.com/petgraph/petgraph)
 - Incremental registration and graph building
-- Concurrent startup with bounded parallelism (configurable max concurrency)
+- Concurrent startup with bounded parallelism
 - Dynamic topological execution using atomic in-degree tracking
 - Automatic skipping of downstream shards on startup failure
-- Graceful shutdown in reverse topological order (best-effort policy)
-- Type-safe retrieval of typed Rust shards via `get_shard<T>()`
+- Graceful shutdown in reverse topological order
+- Runtime mount/unmount of opaque `Shard` instances
+- Concrete Rust type lookup via `get_shard<T>()` when exactly one instance of `T` is registered
 - no_std compatible (with alloc)
 
 ## Installation
@@ -28,14 +32,12 @@ uuid = "1"
 ```
 
 ## Quick Start
-```rust
-use jax::{depends, shard_id, Jax, JaxResult, Shard, ShardDescriptor, TypedShard};
-use std::sync::Arc;
 
-// Define your shard
-struct DatabaseShard {
-    // ...
-}
+```rust
+use std::sync::Arc;
+use jax::{depends, shard_id, Jax, JaxResult, Shard};
+
+struct DatabaseShard;
 
 impl DatabaseShard {
     fn new() -> Self {
@@ -43,23 +45,19 @@ impl DatabaseShard {
     }
 }
 
-impl TypedShard for DatabaseShard {
-    shard_id!("550e8400-e29b-41d4-a716-446655440000");
-}
-
 #[async_trait::async_trait]
 impl Shard for DatabaseShard {
-    fn descriptor(&self) -> ShardDescriptor {
-        ShardDescriptor::typed::<Self>()
+    shard_id!("550e8400-e29b-41d4-a716-446655440000");
+
+    fn label(&self) -> &str {
+        "database"
     }
 
-    async fn setup(&self, jax: Arc<Jax>) -> JaxResult<()> {
-        // Initialize database connection, etc.
+    async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
         Ok(())
     }
 
     async fn teardown(&self, _jax: Arc<Jax>) -> JaxResult<()> {
-        // Close connection
         Ok(())
     }
 }
@@ -72,23 +70,20 @@ impl AuthShard {
     }
 }
 
-impl TypedShard for AuthShard {
-    shard_id!("67e55044-10b1-426f-9247-bb680e5fe0c8");
-}
-
 #[async_trait::async_trait]
 impl Shard for AuthShard {
-    fn descriptor(&self) -> ShardDescriptor {
-        ShardDescriptor::typed::<Self>().with_dependencies(depends![DatabaseShard])
+    shard_id!("67e55044-10b1-426f-9247-bb680e5fe0c8");
+
+    fn label(&self) -> &str {
+        "auth"
     }
+
+    depends![DatabaseShard];
 
     async fn setup(&self, jax: Arc<Jax>) -> JaxResult<()> {
-        let db = jax.get_shard::<DatabaseShard>();
-        // Use db to load auth data
+        let _db = jax.get_shard::<DatabaseShard>();
         Ok(())
     }
-
-    // ...
 }
 
 #[tokio::main]
@@ -100,19 +95,21 @@ async fn main() -> Result<(), Box<dyn core::error::Error + Send + Sync>> {
 
     let jax = Arc::new(jax);
 
-    // Start all shards
     let report = jax.start().await?;
-    println!("Startup report: failed={}, skipped={}", report.failed.len(), report.skipped.len());
+    println!(
+        "Startup report: failed={}, skipped={}",
+        report.failed.len(),
+        report.skipped.len()
+    );
 
-    // Use shards
-    let db = jax.get_shard::<DatabaseShard>();
-    // ... use db
+    let _db = jax.get_shard::<DatabaseShard>();
 
-    // On shutdown
     jax.stop().await?;
 
     Ok(())
 }
 ```
+
 ## License
+
 Mozilla Public License Version 2.0

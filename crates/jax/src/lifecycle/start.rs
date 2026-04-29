@@ -37,7 +37,7 @@ impl Jax {
             let jax_ptr = Arc::clone(self);
             let scheduler_ptr = Arc::clone(&scheduler);
             let registry = Arc::clone(&snapshot);
-            let shard_id = shard.descriptor().id();
+            let shard_id = shard.id();
             let probes = &self.config.probes;
             async move {
                 scheduler_ptr.mark_running(idx);

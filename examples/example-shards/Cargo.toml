@@ -1,16 +1,15 @@
 [package]
-name = "jax-wasm-contract"
+name = "example-shards"
 edition.workspace = true
 version.workspace = true
 
 [lib]
-name = "jax_wasm_contract"
+name = "example_shards"
 crate-type = ["rlib"]
 
 [dependencies]
-serde_json.workspace = true
-tracing.workspace = true
-uuid.workspace = true
+async-trait.workspace = true
+jax.workspace = true
 
 [lints]
 workspace = true

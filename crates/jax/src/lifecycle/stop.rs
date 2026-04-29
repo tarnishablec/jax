@@ -43,9 +43,7 @@ impl Jax {
         for layer in layers.into_iter() {
             let layer = layer
                 .into_iter()
-                .filter(|shard| {
-                    snapshot.state(shard.descriptor().id()) == Some(ShardLifecycleState::Started)
-                })
+                .filter(|shard| snapshot.state(shard.id()) == Some(ShardLifecycleState::Started))
                 .collect::<Vec<_>>();
 
             if layer.is_empty() {
@@ -57,7 +55,7 @@ impl Jax {
                     let jax_ptr = Arc::clone(self);
                     let registry = Arc::clone(&snapshot);
                     async move {
-                        let shard_id = shard.descriptor().id();
+                        let shard_id = shard.id();
                         registry.set_state(shard_id, ShardLifecycleState::Stopping);
 
                         for probe in probes {

@@ -91,7 +91,7 @@ impl<'a> ShardScheduler<'a> {
 
             // If not previously marked as SKIPPED, continue recursion
             if old & SKIPPED == 0 {
-                skipped.push(self.graph[child_idx].descriptor().id());
+                skipped.push(self.graph[child_idx].id());
                 self.propagate_skip(child_idx, skipped);
             }
         }

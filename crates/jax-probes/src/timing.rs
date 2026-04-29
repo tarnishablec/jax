@@ -64,9 +64,7 @@ impl Default for TimingProbe {
 impl Probe for TimingProbe {
     async fn before_setup(&self, shard: &dyn Shard) -> Result<(), Box<dyn Error + Send + Sync>> {
         let now = (self.now_ns)();
-        self.starts
-            .write()
-            .insert(shard.descriptor().id(), AtomicU64::new(now));
+        self.starts.write().insert(shard.id(), AtomicU64::new(now));
         Ok(())
     }
 
@@ -76,7 +74,7 @@ impl Probe for TimingProbe {
         _result: &Result<(), Box<dyn Error + Send + Sync>>,
     ) {
         let now = (self.now_ns)();
-        let shard_id = shard.descriptor().id();
+        let shard_id = shard.id();
         if let Some(start) = self.starts.read().get(&shard_id) {
             let start_ns = start.load(Ordering::Relaxed);
             let elapsed = Duration::from_nanos(now.saturating_sub(start_ns));
@@ -90,22 +88,15 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use alloc::vec;
     use core::sync::atomic::AtomicU64;
-    use jax::{Descriptor, Jax, TypedShard, depends, shard_id};
+    use jax::{Jax, ShardId, depends, shard_id};
     use std::sync::Arc;
 
     struct FakeShard;
 
-    impl TypedShard for FakeShard {
-        shard_id!("00000000-0000-0000-0000-000000000001");
-    }
-
     #[async_trait]
     impl Shard for FakeShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>()
-        }
+        shard_id!("00000000-0000-0000-0000-000000000001");
 
         async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
             // simulate ~50ms of work
@@ -116,15 +107,9 @@ mod tests {
 
     struct FailShard;
 
-    impl TypedShard for FailShard {
-        shard_id!("00000000-0000-0000-0000-000000000002");
-    }
-
     #[async_trait]
     impl Shard for FailShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>()
-        }
+        shard_id!("00000000-0000-0000-0000-000000000002");
 
         async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
             Err("boom".into())
@@ -133,20 +118,36 @@ mod tests {
 
     struct DepShard;
 
-    impl TypedShard for DepShard {
-        shard_id!("00000000-0000-0000-0000-000000000003");
-    }
-
     #[async_trait]
     impl Shard for DepShard {
-        fn descriptor(&self) -> Descriptor {
-            Descriptor::typed::<Self>().with_dependencies(depends![FakeShard])
-        }
+        shard_id!("00000000-0000-0000-0000-000000000003");
+
+        depends![FakeShard];
 
         async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
             tokio::time::sleep(Duration::from_millis(30)).await;
             Ok(())
         }
+    }
+
+    struct AdvancingShard {
+        counter: Arc<AtomicU64>,
+    }
+
+    #[async_trait]
+    impl Shard for AdvancingShard {
+        shard_id!("00000000-0000-0000-0000-000000000004");
+
+        async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
+            self.counter.fetch_add(50_000_000, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    fn test_id(input: &'static str) -> ShardId {
+        input
+            .parse()
+            .unwrap_or_else(|error| panic!("invalid test shard id [{input}]: {error}"))
     }
 
     fn fake_clock() -> (
@@ -161,23 +162,27 @@ mod tests {
 
     #[tokio::test]
     async fn records_setup_duration() {
-        let timing = Arc::new(TimingProbe::new());
+        let (clock, counter) = fake_clock();
+        let timing = Arc::new(TimingProbe::with_clock(clock));
 
         let jax = Jax::default()
             .probe(timing.clone())
-            .register(Arc::new(FakeShard))
+            .register(Arc::new(AdvancingShard {
+                counter: Arc::clone(&counter),
+            }))
             .build()
             .expect("build failed");
 
         let jax = Arc::new(jax);
+        counter.store(0, Ordering::Relaxed);
         let report = jax.start().await.expect("start failed");
         assert!(report.is_success());
 
         let durations = timing.durations();
         let elapsed = durations
-            .get(&FakeShard::static_id())
+            .get(&test_id("00000000-0000-0000-0000-000000000004"))
             .expect("duration not recorded");
-        assert!(elapsed.as_millis() >= 50);
+        assert_eq!(*elapsed, Duration::from_millis(50));
     }
 
     #[tokio::test]
@@ -200,7 +205,7 @@ mod tests {
 
         let durations = probe.durations();
         let elapsed = durations
-            .get(&FakeShard::static_id())
+            .get(&test_id("00000000-0000-0000-0000-000000000001"))
             .expect("duration not recorded");
         assert_eq!(*elapsed, Duration::from_nanos(1_000_000));
     }
@@ -224,7 +229,7 @@ mod tests {
 
         let durations = probe.durations();
         let elapsed = durations
-            .get(&FailShard::static_id())
+            .get(&test_id("00000000-0000-0000-0000-000000000002"))
             .expect("duration not recorded for failed shard");
         assert_eq!(*elapsed, Duration::from_nanos(5_000_000));
     }
@@ -259,18 +264,23 @@ mod tests {
         let durations = probe.durations();
         assert_eq!(durations.len(), 2);
         assert_eq!(
-            *durations.get(&FakeShard::static_id()).expect("missing"),
+            *durations
+                .get(&test_id("00000000-0000-0000-0000-000000000001"))
+                .expect("missing"),
             Duration::from_nanos(10_000_000)
         );
         assert_eq!(
-            *durations.get(&FailShard::static_id()).expect("missing"),
+            *durations
+                .get(&test_id("00000000-0000-0000-0000-000000000002"))
+                .expect("missing"),
             Duration::from_nanos(3_000_000)
         );
     }
 
     #[tokio::test]
     async fn integration_with_dependency_chain() {
-        let timing = Arc::new(TimingProbe::new());
+        let (clock, counter) = fake_clock();
+        let timing = Arc::new(TimingProbe::with_clock(clock));
 
         let jax = Jax::default()
             .probe(timing.clone())
@@ -280,12 +290,13 @@ mod tests {
             .expect("build failed");
 
         let jax = Arc::new(jax);
+        counter.store(0, Ordering::Relaxed);
         let report = jax.start().await.expect("start failed");
         assert!(report.is_success());
 
         let durations = timing.durations();
         assert_eq!(durations.len(), 2);
-        assert!(durations.contains_key(&FakeShard::static_id()));
-        assert!(durations.contains_key(&DepShard::static_id()));
+        assert!(durations.contains_key(&test_id("00000000-0000-0000-0000-000000000001")));
+        assert!(durations.contains_key(&test_id("00000000-0000-0000-0000-000000000003")));
     }
 }
