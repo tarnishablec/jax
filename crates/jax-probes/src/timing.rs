@@ -1,11 +1,10 @@
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use async_trait::async_trait;
-use core::error::Error;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
 use jax::probe::Probe;
-use jax::{Shard, ShardId};
+use jax::{JaxResult, Shard, ShardId};
 
 /// A probe that records per-shard setup durations.
 ///
@@ -62,17 +61,12 @@ impl Default for TimingProbe {
 
 #[async_trait]
 impl Probe for TimingProbe {
-    async fn before_setup(&self, shard: &dyn Shard) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn before_setup(&self, shard: &dyn Shard) {
         let now = (self.now_ns)();
         self.starts.write().insert(shard.id(), AtomicU64::new(now));
-        Ok(())
     }
 
-    async fn after_setup(
-        &self,
-        shard: &dyn Shard,
-        _result: &Result<(), Box<dyn Error + Send + Sync>>,
-    ) {
+    async fn after_setup(&self, shard: &dyn Shard, _result: &JaxResult<()>) {
         let now = (self.now_ns)();
         let shard_id = shard.id();
         if let Some(start) = self.starts.read().get(&shard_id) {
@@ -88,6 +82,7 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use core::error::Error;
     use core::sync::atomic::AtomicU64;
     use jax::{Jax, ShardId, depends, shard_id};
     use std::sync::Arc;
@@ -194,10 +189,7 @@ mod tests {
 
         // Simulate before_setup at t=1000
         counter.store(1_000_000, Ordering::Relaxed);
-        probe
-            .before_setup(&shard as &dyn Shard)
-            .await
-            .expect("before_setup failed");
+        probe.before_setup(&shard as &dyn Shard).await;
 
         // Simulate after_setup at t=2000 (1ms later)
         counter.store(2_000_000, Ordering::Relaxed);
@@ -218,13 +210,10 @@ mod tests {
         let shard = FailShard;
 
         counter.store(0, Ordering::Relaxed);
-        probe
-            .before_setup(&shard as &dyn Shard)
-            .await
-            .expect("before_setup failed");
+        probe.before_setup(&shard as &dyn Shard).await;
 
         counter.store(5_000_000, Ordering::Relaxed);
-        let err: Result<(), Box<dyn Error + Send + Sync>> = Err("boom".into());
+        let err: JaxResult<()> = Err("boom".into());
         probe.after_setup(&shard as &dyn Shard, &err).await;
 
         let durations = probe.durations();
@@ -244,19 +233,13 @@ mod tests {
 
         // shard_a: before at 0, after at 10ms
         counter.store(0, Ordering::Relaxed);
-        probe
-            .before_setup(&shard_a as &dyn Shard)
-            .await
-            .expect("ok");
+        probe.before_setup(&shard_a as &dyn Shard).await;
 
         counter.store(10_000_000, Ordering::Relaxed);
         probe.after_setup(&shard_a as &dyn Shard, &Ok(())).await;
 
         // shard_b: before at 10ms, after at 13ms
-        probe
-            .before_setup(&shard_b as &dyn Shard)
-            .await
-            .expect("ok");
+        probe.before_setup(&shard_b as &dyn Shard).await;
 
         counter.store(13_000_000, Ordering::Relaxed);
         probe.after_setup(&shard_b as &dyn Shard, &Ok(())).await;

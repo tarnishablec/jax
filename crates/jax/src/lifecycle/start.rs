@@ -44,10 +44,7 @@ impl Jax {
                 registry.set_state(shard_id, ShardLifecycleState::Starting);
 
                 for probe in probes {
-                    if let Err(e) = probe.before_setup(shard.as_ref()).await {
-                        registry.set_state(shard_id, ShardLifecycleState::Failed);
-                        return Err((shard_id, idx, e));
-                    }
+                    probe.before_setup(shard.as_ref()).await;
                 }
 
                 let result = shard.setup(jax_ptr).await;

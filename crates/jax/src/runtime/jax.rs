@@ -228,10 +228,7 @@ impl Jax {
         self.reserve_mount(Arc::clone(&shard)).await?;
 
         for probe in &self.config.probes {
-            if let Err(error) = probe.before_setup(shard.as_ref()).await {
-                self.rollback_mount(shard_id).await;
-                return Err(error);
-            }
+            probe.before_setup(shard.as_ref()).await;
         }
 
         let setup_result = shard.setup(Arc::clone(self)).await;
