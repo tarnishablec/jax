@@ -17,7 +17,7 @@ are intentionally outside `jax` core.
 - Automatic skipping of downstream shards on startup failure
 - Graceful shutdown in reverse topological order
 - Runtime mount/unmount of opaque `Shard` instances
-- Concrete Rust type lookup via `get_shard<T>()` when exactly one instance of `T` is registered
+- Static-ID typed lookup via `get_shard<T>()`, with `get_shard_by_id<T>()` for dynamic-ID shards
 - no_std compatible (with alloc)
 
 ## Installation

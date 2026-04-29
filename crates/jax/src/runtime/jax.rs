@@ -4,10 +4,10 @@ use crate::registry::{RegistryHandle, ShardLifecycleState, ShardRegistry};
 use crate::shard::{Shard, ShardId};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::any::{TypeId, type_name};
+use core::any::type_name;
 use core::error::Error;
 use petgraph::prelude::*;
 use petgraph::visit::EdgeRef;
@@ -135,42 +135,29 @@ impl Jax {
         Ok(self)
     }
 
-    /// Retrieve a shard by its concrete Rust type.
+    /// Retrieve a shard by static Rust type ID.
     ///
-    /// Panics if no registered shard has type `T`, or if more than one shard
-    /// has type `T`. Use `get_shard_by_id<T>()` when multiple instances of the
-    /// same Rust type are registered.
+    /// `T` must declare a static shard ID, usually by implementing its ID with
+    /// `shard_id!`. Dynamic-ID shards must be retrieved with
+    /// `get_shard_by_id<T>()`.
+    ///
+    /// Panics if the registry has not been built, if `T` has no static shard
+    /// ID, if that ID is not registered, or if the registered shard does not
+    /// have type `T`.
     pub fn get_shard<T: Shard>(&self) -> Arc<T> {
+        let shard_id = T::static_id().unwrap_or_else(|| {
+            panic!(
+                "Jax: Shard type [{}] has no static shard ID. Use get_shard_by_id()",
+                type_name::<T>()
+            )
+        });
+
         let snapshot = match self.registry.snapshot() {
             Some(snapshot) => snapshot,
             None => panic!("Jax: Registry is null. Did you call build()?"),
         };
 
-        let matches = snapshot
-            .type_index
-            .get(&TypeId::of::<T>())
-            .cloned()
-            .unwrap_or_default();
-
-        match matches.len() {
-            1 => self.get_shard_by_id(matches[0]),
-            0 => panic!(
-                "Jax: Shard type [{}] not found. Was it registered?",
-                type_name::<T>()
-            ),
-            _ => {
-                let ids = matches
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                panic!(
-                    "Jax: Shard type [{}] matched multiple registered shards: [{}]. Use get_shard_by_id()",
-                    type_name::<T>(),
-                    ids
-                )
-            }
-        }
+        Self::get_shard_from_snapshot(&snapshot, shard_id)
     }
 
     /// Retrieve a shard by stable runtime ID and concrete Rust type.
@@ -183,6 +170,10 @@ impl Jax {
             None => panic!("Jax: Registry is null. Did you call build()?"),
         };
 
+        Self::get_shard_from_snapshot(&snapshot, shard_id)
+    }
+
+    fn get_shard_from_snapshot<T: Shard>(snapshot: &ShardRegistry, shard_id: ShardId) -> Arc<T> {
         let node_idx = snapshot.indices.get(&shard_id).unwrap_or_else(|| {
             panic!(
                 "Jax: Shard [{}] with ID [{}] not found. Was it registered?",
@@ -574,7 +565,6 @@ mod tests {
     static SELF_VISIBLE_SETUPS: AtomicUsize = AtomicUsize::new(0);
     static REENTRANT_OUTER_SETUPS: AtomicUsize = AtomicUsize::new(0);
     static REENTRANT_INNER_SETUPS: AtomicUsize = AtomicUsize::new(0);
-    static TYPE_INDEX_SETUPS: AtomicUsize = AtomicUsize::new(0);
     static DEFAULT_LABEL_SETUPS: AtomicUsize = AtomicUsize::new(0);
 
     macro_rules! counted_yield_setup_shard {
@@ -747,17 +737,12 @@ mod tests {
         }
     }
 
-    struct TypeIndexedShard(ShardId);
+    struct DynamicIdShard(ShardId);
 
     #[async_trait::async_trait]
-    impl Shard for TypeIndexedShard {
+    impl Shard for DynamicIdShard {
         fn id(&self) -> ShardId {
             self.0
-        }
-
-        async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
-            TYPE_INDEX_SETUPS.fetch_add(1, Ordering::Relaxed);
-            Ok(())
         }
     }
 
@@ -1036,60 +1021,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_shard_uses_type_index_for_unique_type() -> JaxResult<()> {
-        let shard = Arc::new(TypeIndexedShard(test_id(
-            "00000000-0000-0000-0000-000000000401",
-        )));
+    async fn get_shard_uses_static_id() -> JaxResult<()> {
+        let shard = Arc::new(DefaultLabelShard);
         let jax = Jax::default().register(shard.clone()).build()?;
 
-        let resolved = jax.get_shard::<TypeIndexedShard>();
+        let resolved = jax.get_shard::<DefaultLabelShard>();
 
         assert!(Arc::ptr_eq(&resolved, &shard));
         Ok(())
     }
 
     #[tokio::test]
-    async fn get_shard_reports_ambiguous_type_index_matches() -> JaxResult<()> {
+    async fn get_shard_requires_static_id() -> JaxResult<()> {
         let jax = Jax::default()
-            .register(Arc::new(TypeIndexedShard(test_id(
-                "00000000-0000-0000-0000-000000000402",
-            ))))
-            .register(Arc::new(TypeIndexedShard(test_id(
-                "00000000-0000-0000-0000-000000000403",
+            .register(Arc::new(DynamicIdShard(test_id(
+                "00000000-0000-0000-0000-000000000401",
             ))))
             .build()?;
 
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = jax.get_shard::<TypeIndexedShard>();
+            let _ = jax.get_shard::<DynamicIdShard>();
         }))
-        .expect_err("ambiguous type lookup should panic");
+        .expect_err("dynamic-ID type lookup should panic");
         let message = panic_message(panic);
 
-        assert!(message.contains("matched multiple registered shards"));
+        assert!(message.contains("has no static shard ID"));
         Ok(())
     }
 
     #[tokio::test]
-    async fn type_index_updates_after_mount_and_unmount() -> JaxResult<()> {
-        TYPE_INDEX_SETUPS.store(0, Ordering::Relaxed);
-        let shard_id = test_id("00000000-0000-0000-0000-000000000404");
+    async fn get_shard_by_id_resolves_dynamic_id_shards() -> JaxResult<()> {
+        let shard_id = test_id("00000000-0000-0000-0000-000000000402");
+        let shard = Arc::new(DynamicIdShard(shard_id));
+        let jax = Jax::default().register(shard.clone()).build()?;
 
-        let jax = Arc::new(Jax::default().build()?);
-        let report = jax.start().await?;
-        assert!(report.is_success());
+        let resolved = jax.get_shard_by_id::<DynamicIdShard>(shard_id);
 
-        jax.mount(Arc::new(TypeIndexedShard(shard_id))).await?;
-        assert_eq!(jax.get_shard::<TypeIndexedShard>().id(), shard_id);
-
-        jax.unmount(shard_id).await?;
-        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = jax.get_shard::<TypeIndexedShard>();
-        }))
-        .expect_err("unmounted type lookup should panic");
-        let message = panic_message(panic);
-
-        assert!(message.contains("not found"));
-        assert_eq!(TYPE_INDEX_SETUPS.load(Ordering::Relaxed), 1);
+        assert!(Arc::ptr_eq(&resolved, &shard));
         Ok(())
     }
 
