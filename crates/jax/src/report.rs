@@ -1,11 +1,10 @@
+use crate::JaxError;
 use crate::shard::ShardId;
-use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::error::Error;
 
 pub struct ShardError {
     pub id: ShardId,
-    pub error: Box<dyn Error + Send + Sync>,
+    pub error: JaxError,
 }
 
 #[derive(Default)]

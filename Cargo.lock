@@ -27,7 +27,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "example-shards"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "jax",
@@ -123,7 +123,7 @@ checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
 
 [[package]]
 name = "host-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "example-shards",
  "jax",
@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "jax"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "downcast-rs",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "jax-probes"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "jax",
