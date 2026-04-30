@@ -1,0 +1,15 @@
+[package]
+name = "example-shards"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "example_shards"
+crate-type = ["rlib"]
+
+[dependencies]
+async-trait.workspace = true
+jax.workspace = true
+
+[lints]
+workspace = true

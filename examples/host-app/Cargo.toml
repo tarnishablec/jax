@@ -1,0 +1,16 @@
+[package]
+name = "host-app"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "host-app"
+path = "src/main.rs"
+
+[dependencies]
+example-shards.workspace = true
+jax.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

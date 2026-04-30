@@ -1,7 +1,7 @@
 use crate::shard::Shard;
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::error::Error;
 use petgraph::prelude::*;
@@ -14,15 +14,15 @@ pub fn compute_shard_layers(
     let mut layers = Vec::new();
 
     // 1. Compute in-degree for each node
-    let mut in_degrees = vec![0; graph.node_count()];
+    let mut in_degrees = BTreeMap::new();
     for node in graph.node_indices() {
-        in_degrees[node.index()] = graph.edges_directed(node, Incoming).count();
+        in_degrees.insert(node, graph.edges_directed(node, Incoming).count());
     }
 
     // 2. Collect all nodes with in-degree 0 (first layer)
     let mut current_layer_nodes: Vec<NodeIndex> = graph
         .node_indices()
-        .filter(|&n| in_degrees[n.index()] == 0)
+        .filter(|node| matches!(in_degrees.get(node), Some(0)))
         .collect();
 
     let mut processed_count = 0;
@@ -39,11 +39,17 @@ pub fn compute_shard_layers(
 
             for edge in graph.edges_directed(u, Outgoing) {
                 let v = edge.target();
-                let v_idx = v.index();
+                let Some(in_degree) = in_degrees.get_mut(&v) else {
+                    return Err(alloc::format!(
+                        "Jax: Missing in-degree state for shard node [{}]",
+                        v.index()
+                    )
+                    .into());
+                };
 
-                in_degrees[v_idx] -= 1;
+                *in_degree -= 1;
 
-                if in_degrees[v_idx] == 0 {
+                if *in_degree == 0 {
                     next_layer_nodes.push(v);
                 }
             }

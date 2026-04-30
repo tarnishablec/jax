@@ -2,18 +2,22 @@
 
 [![no_std compatible](https://img.shields.io/badge/no__std-compatible-seagreen.svg?style=flat-square)](https://crates.io/crates/jax)
 
-Jax is a lightweight, dependency-aware plugin system for Rust applications. It allows you to register modular components called "shards" that have explicit dependencies and handle their lifecycle (setup and teardown) in the correct topological order with support for bounded concurrency and failure propagation.
+Jax is a lightweight, dependency-aware lifecycle runtime for Rust applications.
+It manages opaque shards with stable IDs, explicit dependencies, and ordered
+setup/teardown. Cross-runtime guest protocols, exports, and invocation routing
+are intentionally outside `jax` core.
 
 ## Features
 
 - Declare shards with stable UUID identifiers and explicit dependencies
 - Automatic dependency graph construction using [petgraph](https://github.com/petgraph/petgraph)
 - Incremental registration and graph building
-- Concurrent startup with bounded parallelism (configurable max concurrency)
+- Concurrent startup with bounded parallelism
 - Dynamic topological execution using atomic in-degree tracking
 - Automatic skipping of downstream shards on startup failure
-- Graceful shutdown in reverse topological order (best-effort policy)
-- Type-safe retrieval of native shards via `get_shard<T>()`
+- Graceful shutdown in reverse topological order
+- Runtime mount/unmount of opaque `Shard` instances
+- Static-ID typed lookup via `get_shard<T>()`, with `get_shard_by_id<T>()` for dynamic-ID shards
 - no_std compatible (with alloc)
 
 ## Installation
@@ -23,17 +27,17 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 jax = { git = "https://github.com/tarnishablec/jax.git", branch = "main" }  # or use a published version when available
+async-trait = "0.1"
+uuid = "1"
 ```
 
 ## Quick Start
-```rust
-use jax::{depends, shard_id, Jax, Shard};
-use core::sync::Arc;
 
-// Define your shard
-struct DatabaseShard {
-    // ...
-}
+```rust
+use std::sync::Arc;
+use jax::{depends, shard_id, Jax, JaxResult, Shard};
+
+struct DatabaseShard;
 
 impl DatabaseShard {
     fn new() -> Self {
@@ -41,16 +45,19 @@ impl DatabaseShard {
     }
 }
 
+#[async_trait::async_trait]
 impl Shard for DatabaseShard {
     shard_id!("550e8400-e29b-41d4-a716-446655440000");
 
-    async fn setup(&self, jax: Arc<Jax>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Initialize database connection, etc.
+    fn label(&self) -> &str {
+        "database"
+    }
+
+    async fn setup(&self, _jax: Arc<Jax>) -> JaxResult<()> {
         Ok(())
     }
 
-    async fn teardown(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Close connection
+    async fn teardown(&self, _jax: Arc<Jax>) -> JaxResult<()> {
         Ok(())
     }
 }
@@ -63,20 +70,20 @@ impl AuthShard {
     }
 }
 
+#[async_trait::async_trait]
 impl Shard for AuthShard {
     shard_id!("67e55044-10b1-426f-9247-bb680e5fe0c8");
 
-    fn dependencies(&self) -> Vec<Uuid> {
-        depends![DatabaseShard]
+    fn label(&self) -> &str {
+        "auth"
     }
 
-    async fn setup(&self, jax: Arc<Jax>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let db = jax.get_shard::<DatabaseShard>();
-        // Use db to load auth data
+    depends![DatabaseShard];
+
+    async fn setup(&self, jax: Arc<Jax>) -> JaxResult<()> {
+        let _db = jax.get_shard::<DatabaseShard>();
         Ok(())
     }
-
-    // ...
 }
 
 #[tokio::main]
@@ -88,19 +95,21 @@ async fn main() -> Result<(), Box<dyn core::error::Error + Send + Sync>> {
 
     let jax = Arc::new(jax);
 
-    // Start all shards
     let report = jax.start().await?;
-    println!("Startup report: failed={}, skipped={}", report.failed.len(), report.skipped.len());
+    println!(
+        "Startup report: failed={}, skipped={}",
+        report.failed.len(),
+        report.skipped.len()
+    );
 
-    // Use shards
-    let db = jax.get_shard::<DatabaseShard>();
-    // ... use db
+    let _db = jax.get_shard::<DatabaseShard>();
 
-    // On shutdown
     jax.stop().await?;
 
     Ok(())
 }
 ```
+
 ## License
+
 Mozilla Public License Version 2.0

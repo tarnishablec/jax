@@ -3,17 +3,26 @@ resolver = "3"
 members = [
     "crates/jax",
     "crates/jax-probes",
+    "examples/example-shards",
+    "examples/host-app",
 ]
 
 [workspace.package]
 edition = "2024"
-version = "0.2.0"
+version = "0.3.0"
 
 [workspace.dependencies]
 jax = { path = "crates/jax" }
-uuid = { version = "1.23.0", features = ["v4"] }
-async-trait = "0.1.89"
-futures = { version = "0.3.32", default-features = false, features = ["alloc"] }
+example-shards = { path = "examples/example-shards" }
+host-app = { path = "examples/host-app" }
+
+uuid = { version = "1", default-features = false, features = ["macro-diagnostics"] }
+async-trait = "0.1"
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
+downcast-rs = { version = "2", default-features = false }
+petgraph = { version = "0.8", default-features = false }
+spin = { version = "0.10", default-features = false }
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

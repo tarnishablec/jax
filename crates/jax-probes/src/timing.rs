@@ -1,12 +1,10 @@
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use async_trait::async_trait;
-use core::error::Error;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
-use jax::Shard;
 use jax::probe::Probe;
-use uuid::Uuid;
+use jax::{JaxResult, Shard, ShardId};
 
 /// A probe that records per-shard setup durations.
 ///
@@ -27,8 +25,8 @@ pub struct TimingProbe {
     /// Stores start timestamps keyed by shard index.
     /// Using a simple atomic slot per-shard would be ideal,
     /// but we use a fixed-size array approach via AtomicU64 map.
-    starts: spin::RwLock<BTreeMap<Uuid, AtomicU64>>,
-    durations: spin::RwLock<BTreeMap<Uuid, Duration>>,
+    starts: spin::RwLock<BTreeMap<ShardId, AtomicU64>>,
+    durations: spin::RwLock<BTreeMap<ShardId, Duration>>,
 }
 
 impl TimingProbe {
@@ -49,31 +47,32 @@ impl TimingProbe {
     }
 
     /// Returns a snapshot of all recorded durations.
-    pub fn durations(&self) -> BTreeMap<Uuid, Duration> {
+    pub fn durations(&self) -> BTreeMap<ShardId, Duration> {
         self.durations.read().clone()
+    }
+}
+
+#[cfg(feature = "std")]
+impl Default for TimingProbe {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 #[async_trait]
 impl Probe for TimingProbe {
-    async fn before_setup(&self, shard: &dyn Shard) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn before_setup(&self, shard: &dyn Shard) {
         let now = (self.now_ns)();
-        self.starts
-            .write()
-            .insert(shard.id(), AtomicU64::new(now));
-        Ok(())
+        self.starts.write().insert(shard.id(), AtomicU64::new(now));
     }
 
-    async fn after_setup(
-        &self,
-        shard: &dyn Shard,
-        _result: &Result<(), Box<dyn Error + Send + Sync>>,
-    ) {
+    async fn after_setup(&self, shard: &dyn Shard, _result: &JaxResult<()>) {
         let now = (self.now_ns)();
-        if let Some(start) = self.starts.read().get(&shard.id()) {
+        let shard_id = shard.id();
+        if let Some(start) = self.starts.read().get(&shard_id) {
             let start_ns = start.load(Ordering::Relaxed);
             let elapsed = Duration::from_nanos(now.saturating_sub(start_ns));
-            self.durations.write().insert(shard.id(), elapsed);
+            self.durations.write().insert(shard_id, elapsed);
         }
     }
 }
@@ -83,9 +82,9 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use alloc::vec;
+    use core::error::Error;
     use core::sync::atomic::AtomicU64;
-    use jax::{Jax, shard_id};
+    use jax::{Jax, ShardId, depends, shard_id};
     use std::sync::Arc;
 
     struct FakeShard;
@@ -118,17 +117,38 @@ mod tests {
     impl Shard for DepShard {
         shard_id!("00000000-0000-0000-0000-000000000003");
 
+        depends![FakeShard];
+
         async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
             tokio::time::sleep(Duration::from_millis(30)).await;
             Ok(())
         }
+    }
 
-        fn dependencies(&self) -> vec::Vec<Uuid> {
-            vec![FakeShard::static_id()]
+    struct AdvancingShard {
+        counter: Arc<AtomicU64>,
+    }
+
+    #[async_trait]
+    impl Shard for AdvancingShard {
+        shard_id!("00000000-0000-0000-0000-000000000004");
+
+        async fn setup(&self, _jax: Arc<Jax>) -> Result<(), Box<dyn Error + Send + Sync>> {
+            self.counter.fetch_add(50_000_000, Ordering::Relaxed);
+            Ok(())
         }
     }
 
-    fn fake_clock() -> (impl Fn() -> u64 + Send + Sync + Clone + 'static, Arc<AtomicU64>) {
+    fn test_id(input: &'static str) -> ShardId {
+        input
+            .parse()
+            .unwrap_or_else(|error| panic!("invalid test shard id [{input}]: {error}"))
+    }
+
+    fn fake_clock() -> (
+        impl Fn() -> u64 + Send + Sync + Clone + 'static,
+        Arc<AtomicU64>,
+    ) {
         let counter = Arc::new(AtomicU64::new(0));
         let c = counter.clone();
         let f = move || c.load(Ordering::Relaxed);
@@ -137,23 +157,27 @@ mod tests {
 
     #[tokio::test]
     async fn records_setup_duration() {
-        let timing = Arc::new(TimingProbe::new());
+        let (clock, counter) = fake_clock();
+        let timing = Arc::new(TimingProbe::with_clock(clock));
 
         let jax = Jax::default()
             .probe(timing.clone())
-            .register(Arc::new(FakeShard))
+            .register(Arc::new(AdvancingShard {
+                counter: Arc::clone(&counter),
+            }))
             .build()
             .expect("build failed");
 
         let jax = Arc::new(jax);
+        counter.store(0, Ordering::Relaxed);
         let report = jax.start().await.expect("start failed");
         assert!(report.is_success());
 
         let durations = timing.durations();
         let elapsed = durations
-            .get(&FakeShard::static_id())
+            .get(&test_id("00000000-0000-0000-0000-000000000004"))
             .expect("duration not recorded");
-        assert!(elapsed.as_millis() >= 50);
+        assert_eq!(*elapsed, Duration::from_millis(50));
     }
 
     #[tokio::test]
@@ -165,20 +189,15 @@ mod tests {
 
         // Simulate before_setup at t=1000
         counter.store(1_000_000, Ordering::Relaxed);
-        probe
-            .before_setup(&shard as &dyn Shard)
-            .await
-            .expect("before_setup failed");
+        probe.before_setup(&shard as &dyn Shard).await;
 
         // Simulate after_setup at t=2000 (1ms later)
         counter.store(2_000_000, Ordering::Relaxed);
-        probe
-            .after_setup(&shard as &dyn Shard, &Ok(()))
-            .await;
+        probe.after_setup(&shard as &dyn Shard, &Ok(())).await;
 
         let durations = probe.durations();
         let elapsed = durations
-            .get(&FakeShard::static_id())
+            .get(&test_id("00000000-0000-0000-0000-000000000001"))
             .expect("duration not recorded");
         assert_eq!(*elapsed, Duration::from_nanos(1_000_000));
     }
@@ -191,18 +210,15 @@ mod tests {
         let shard = FailShard;
 
         counter.store(0, Ordering::Relaxed);
-        probe
-            .before_setup(&shard as &dyn Shard)
-            .await
-            .expect("before_setup failed");
+        probe.before_setup(&shard as &dyn Shard).await;
 
         counter.store(5_000_000, Ordering::Relaxed);
-        let err: Result<(), Box<dyn Error + Send + Sync>> = Err("boom".into());
+        let err: JaxResult<()> = Err("boom".into());
         probe.after_setup(&shard as &dyn Shard, &err).await;
 
         let durations = probe.durations();
         let elapsed = durations
-            .get(&FailShard::static_id())
+            .get(&test_id("00000000-0000-0000-0000-000000000002"))
             .expect("duration not recorded for failed shard");
         assert_eq!(*elapsed, Duration::from_nanos(5_000_000));
     }
@@ -217,13 +233,13 @@ mod tests {
 
         // shard_a: before at 0, after at 10ms
         counter.store(0, Ordering::Relaxed);
-        probe.before_setup(&shard_a as &dyn Shard).await.expect("ok");
+        probe.before_setup(&shard_a as &dyn Shard).await;
 
         counter.store(10_000_000, Ordering::Relaxed);
         probe.after_setup(&shard_a as &dyn Shard, &Ok(())).await;
 
         // shard_b: before at 10ms, after at 13ms
-        probe.before_setup(&shard_b as &dyn Shard).await.expect("ok");
+        probe.before_setup(&shard_b as &dyn Shard).await;
 
         counter.store(13_000_000, Ordering::Relaxed);
         probe.after_setup(&shard_b as &dyn Shard, &Ok(())).await;
@@ -231,18 +247,23 @@ mod tests {
         let durations = probe.durations();
         assert_eq!(durations.len(), 2);
         assert_eq!(
-            *durations.get(&FakeShard::static_id()).expect("missing"),
+            *durations
+                .get(&test_id("00000000-0000-0000-0000-000000000001"))
+                .expect("missing"),
             Duration::from_nanos(10_000_000)
         );
         assert_eq!(
-            *durations.get(&FailShard::static_id()).expect("missing"),
+            *durations
+                .get(&test_id("00000000-0000-0000-0000-000000000002"))
+                .expect("missing"),
             Duration::from_nanos(3_000_000)
         );
     }
 
     #[tokio::test]
     async fn integration_with_dependency_chain() {
-        let timing = Arc::new(TimingProbe::new());
+        let (clock, counter) = fake_clock();
+        let timing = Arc::new(TimingProbe::with_clock(clock));
 
         let jax = Jax::default()
             .probe(timing.clone())
@@ -252,12 +273,13 @@ mod tests {
             .expect("build failed");
 
         let jax = Arc::new(jax);
+        counter.store(0, Ordering::Relaxed);
         let report = jax.start().await.expect("start failed");
         assert!(report.is_success());
 
         let durations = timing.durations();
         assert_eq!(durations.len(), 2);
-        assert!(durations.contains_key(&FakeShard::static_id()));
-        assert!(durations.contains_key(&DepShard::static_id()));
+        assert!(durations.contains_key(&test_id("00000000-0000-0000-0000-000000000001")));
+        assert!(durations.contains_key(&test_id("00000000-0000-0000-0000-000000000003")));
     }
 }
